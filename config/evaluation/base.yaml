@@ -1,0 +1,3 @@
+prompt_seed: "data/prompt_seed/AdvBench/advBench.json"
+batch_size: 20
+num_turns: 5

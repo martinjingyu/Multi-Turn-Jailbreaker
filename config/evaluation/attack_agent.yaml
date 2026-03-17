@@ -1,0 +1,10 @@
+# SamplingParams
+model: MartinJYHuang/Jailbreak-agent-temp
+# model: Qwen/Qwen3-8B
+temperature: 1
+top_p: 0.8
+top_k: 20
+max_new_tokens: 8094
+do_sample: True
+half_precision: True
+dtype: "bfloat16"

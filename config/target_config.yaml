@@ -1,0 +1,18 @@
+# SamplingParams
+# model: meta-llama/Meta-Llama-3-8B-Instruct
+model: thu-ml/STAIR-Llama-3.1-8B-SFT
+# model: Google/gemini
+# model: Amazon/claude
+# model: lmsys/vicuna-7b-v1.5
+# model: HuggingFaceH4/zephyr-7b-beta
+# model: mistralai/Mistral-7B-Instruct-v0.1
+temperature: 1
+gpu_memory_utilization: 0.45
+max_model_len: 8192
+max_new_tokens: 512
+top_p: 0.9
+top_k: 50
+do_sample: True
+
+dtype: "bfloat16"
+use_vllm: True

@@ -1,0 +1,18 @@
+# SamplingParams
+# model: MartinJYHuang/jailbreakAgent-grpo
+# model: MartinJYHuang/JA-v1
+model: MartinJYHuang/JA-v2
+# model: MartinJYHuang/Jailbreak-agent-temp
+# model: MartinJYHuang/JA-Llama-3
+# model: Qwen/Qwen3-14B
+# model: tmp/
+gpu_memory_utilization: 0.45
+temperature: 1
+top_p: 0.8
+top_k: 20
+max_tokens: 14000
+max_new_tokens: 819
+do_sample: True
+half_precision: True
+dtype: "bfloat16"
+vllm: True

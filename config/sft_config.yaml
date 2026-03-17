@@ -1,0 +1,27 @@
+# model
+model_name: "Qwen/Qwen3-8B"
+
+# data
+data_path: "data/raw_data/sftData"
+
+# training
+cache_dir: null
+optim: "adamw_bnb_8bit"
+# deepspeed: "config/ds_config.json"
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+model_max_length: 15000
+overwrite_output_dir: true
+bf16: true
+
+output_dir: "./checkpoints/sft_warmup"
+num_train_epochs: 3
+save_strategy: "steps" 
+save_steps: 500
+save_total_limit: 5 
+evaluation_strategy: "no" 
+logging_steps: 50
+logging_dir: "./logs"
+report_to: "tensorboard"  
+
+learning_rate: 1e-5

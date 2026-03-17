@@ -1,0 +1,17 @@
+seed: 23333
+iter: 20
+task_name: grpo
+output_path: data/raw_data/grpo/
+reward_url: local
+trees_per_batch: 3
+batch_size: 60
+
+whether_sft: True
+child_num_list: [3,3,5,4]
+p_average_strategy: "uniform"
+able_to_reselected: True
+use_strategy: False
+
+success_weight: 0.8
+diversity_weight: 0.05
+format_weight: 0.8
