@@ -19,3 +19,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     upload_model_folder(args.model_path, args.repo_id)
+    
+    #--model_path /var/lib/condor/execute/slot2/dir_3062297/scratch/Multi-Turn-Jailbreaker/checkpoints/sft_warmup/checkpoint-54 --repo_id MartinJYHuang/Multi-Turn-Jailbreaker-SFT

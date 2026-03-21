@@ -4,7 +4,8 @@
 # model: MartinJYHuang/JA-v2
 # model: MartinJYHuang/Jailbreak-agent-temp
 # model: MartinJYHuang/JA-Llama-3
-model: Qwen/Qwen3-14B
+# model: Qwen/Qwen3-14B
+model: MartinJYHuang/Multi-Turn-Jailbreaker-SFT
 # model: tmp/
 gpu_memory_utilization: 0.45
 temperature: 1
