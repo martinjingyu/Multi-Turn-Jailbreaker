@@ -6,7 +6,7 @@ if __name__ == "__main__":
     
 
     local_path = snapshot_download(
-        repo_id="MartinJYHuang/jailbreak-agent", 
+        repo_id="MartinJYHuang/Multi-Jailbreaker", 
         
         repo_type="dataset",
         local_dir="./data",

@@ -10,7 +10,7 @@ optim: "adamw_bnb_8bit"
 # deepspeed: "config/ds_config.json"
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 1
-model_max_length: 15000
+model_max_length: 16392
 overwrite_output_dir: true
 bf16: true
 
