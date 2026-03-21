@@ -285,22 +285,10 @@ class TreeGenerator():
             else:
                 target_responses = self.target.batch_response(target_messages_list)
             
-            if self.target.config.model in ["Openai/gpt","Google/gemini","Amazon/claude"]:
-                depth = len(target_messages_list[0])/2
-                results = []
-                
-                for res in target_responses:
-                    results.append(str(depth))
-                scores = results
             
-            else:
-                scores = self.evaluator.eval_batch(target_responses, target_messages_list)
-                depth = len(target_messages_list[0])/2
-                results = []
-                
-                for res in target_responses:
-                    results.append(str(depth))
-                scores = results
+            # else:
+            scores = self.evaluator.eval_batch(target_responses, target_messages_list)
+            
             print(scores)
             for node, response, score in zip(sub_node_list, target_responses, scores):
                 node.depth = node.parent.depth+1

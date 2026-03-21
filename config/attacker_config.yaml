@@ -7,7 +7,7 @@
 model: Qwen/Qwen3-14B
 # model: tmp/
 gpu_memory_utilization: 0.45
-temperature: 1.2
+temperature: 1
 top_p: 0.8
 top_k: 20
 max_tokens: 16392
