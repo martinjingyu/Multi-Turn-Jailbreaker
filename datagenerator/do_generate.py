@@ -22,6 +22,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--start_idx", type=int, default=0)
     parser.add_argument("--end_idx", type=int, default=1)
+    parser.add_argument("--prompt_seed", type=str, default="sft")
     return parser.parse_args()
 
 
@@ -39,7 +40,6 @@ def main():
         
     attack_agent = AttackAgent(attacker_config)
     target = TargetModel(target_cfg)
-    # evaluator = Evaluator(target.model, target.tokenizer, target.sampling_params)
     
     os.environ["CUDA_VISIBLE_DEVICES"] = '3'
     torch.cuda.set_device(0)
@@ -47,30 +47,16 @@ def main():
     generator = TreeGenerator(cfg, attack_agent, target, evaluator)
     
     
-    try:
-        if (cfg.seed_prompts_file.endswith(".parquet")):
-            dataset = datasets.load_dataset("parquet", data_files=cfg.seed_prompts_file)
-            prompts_data = dataset["train"]
-            prompts_data_list = []
-            for i in range(len(prompts_data)):
-                prompts_data_list.append(prompts_data[i])
-            prompts_data = prompts_data_list
-        
-        
-        else:
-            prompts_data_list = []
-            with open(cfg.seed_prompts_file, "r") as f:
-                prompts_data = json.load(f)
-                for prompt in prompts_data:
-                    
-                    prompts_data_list.append(prompt["goal"])
-
-    except Exception as e:
-        print(f"Error loading prompts data: {e}")
-        # with open(cfg.seed_prompts_file, "r") as f:
-        #     prompts_data = [json.loads(line) for line in f.readlines()]
-        exit()
-        
+    prompts_data_list = []
+    with open(f"data/{args.prompt_seed}.json", "r") as file:
+        data = json.load(file)
+        for p in data:
+            if "prompt" in data:
+                prompts_data_list.append(p["prompt"])
+            if "question" in data:
+                prompts_data_list.append(p["question"])
+                
+  
     random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
     
@@ -79,7 +65,9 @@ def main():
     if not os.path.exists(cfg.output_path):
         os.makedirs(cfg.output_path, exist_ok=True)
 
-    logging.info(f"Load {len(prompts_data)} Prompts for generating trajectory data!")
+    logging.info(f"Load {len(prompts_data_list)} Prompts for generating trajectory data!")
+    
+    exit()
     
     for i in range(args.start_idx, args.end_idx, cfg.trees_per_batch):
 
@@ -88,7 +76,7 @@ def main():
         
         
         for j, root_node in enumerate(root_node_list):
-            root_node.save_tree(f"{cfg.output_path}/{i}_{j}.json")
+            root_node.save_tree(f"{cfg.output_path}/{i+j}.json")
         
         upload_data()
         
