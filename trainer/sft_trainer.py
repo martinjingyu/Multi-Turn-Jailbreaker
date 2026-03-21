@@ -60,7 +60,6 @@ def train():
     print(model_args)
     print(data_args)
     print(training_args)
-    exit()
 
     seed = 42
     torch.manual_seed(seed)
@@ -96,7 +95,6 @@ def train():
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     
-    exit()
     
     
     trainer = Trainer(model_init=model_init, tokenizer=tokenizer, args=training_args, **data_module)
@@ -117,4 +115,3 @@ def train():
 if __name__ == "__main__":
     data = None
     train()
-    pass
