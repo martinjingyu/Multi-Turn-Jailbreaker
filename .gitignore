@@ -1,0 +1,5 @@
+trainer_output/
+checkpoints/
+data/
+__pycache__/
+tmp/
