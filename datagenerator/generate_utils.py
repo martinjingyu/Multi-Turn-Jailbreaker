@@ -289,7 +289,7 @@ class TreeGenerator():
             # else:
             scores = self.evaluator.eval_batch(target_responses, target_messages_list)
             
-            print(scores)
+            # print(scores)
             for node, response, score in zip(sub_node_list, target_responses, scores):
                 node.depth = node.parent.depth+1
                 node.response = response
