@@ -7,7 +7,7 @@
 # bash scripts/do_generate.bash 180 200 3 & 
 start_idx=$1
 end_idx=$2
-GPU=$3
+GPU=$0
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
