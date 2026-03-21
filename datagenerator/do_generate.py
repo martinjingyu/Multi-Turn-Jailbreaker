@@ -67,7 +67,7 @@ def main():
 
     logging.info(f"Load {len(prompts_data_list)} Prompts for generating trajectory data!")
     
-    exit()
+    # exit()
     
     for i in range(args.start_idx, args.end_idx, cfg.trees_per_batch):
 
