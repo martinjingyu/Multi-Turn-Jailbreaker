@@ -14,5 +14,5 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 CUDA_VISIBLE_DEVICES=$GPU python ./datagenerator/do_generate.py \
     --start_idx=$start_idx \
     --end_idx=$end_idx\
-    --prompot_seed 'sft'
+    --prompot_seed sft
 
