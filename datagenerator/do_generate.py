@@ -51,9 +51,9 @@ def main():
     with open(f"data/{args.prompt_seed}.json", "r") as file:
         data = json.load(file)
         for p in data:
-            if "prompt" in data:
+            if "prompt" in p:
                 prompts_data_list.append(p["prompt"])
-            if "question" in data:
+            if "question" in p:
                 prompts_data_list.append(p["question"])
                 
   
@@ -69,6 +69,8 @@ def main():
     
     # exit()
     
+    
+    print(f"Load {len(prompts_data_list)}")
     for i in range(args.start_idx, args.end_idx, cfg.trees_per_batch):
 
         sub_prompt_seeds = prompts_data_list[i:i+cfg.trees_per_batch]
