@@ -2,13 +2,9 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
 import re
-
 import yaml
 import json
 from types import SimpleNamespace
-
-from model.Attacker import AttackAgent
-from model.Target.target_model import TargetModel
 import os
 from datagenerator.generate_utils import TreeGenerator, Node
 class TargetModel():
