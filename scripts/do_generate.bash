@@ -7,11 +7,12 @@
 # bash scripts/do_generate.bash 180 200 3 & 
 start_idx=$1
 end_idx=$2
-GPU=$0
+GPU=0
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
 
 CUDA_VISIBLE_DEVICES=$GPU python ./datagenerator/do_generate.py \
     --start_idx=$start_idx \
     --end_idx=$end_idx\
+    --prompot_seed 'sft'
 
