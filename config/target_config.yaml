@@ -1,6 +1,6 @@
 # SamplingParams
-# model: meta-llama/Meta-Llama-3-8B-Instruct
-model: thu-ml/STAIR-Llama-3.1-8B-SFT
+model: meta-llama/Meta-Llama-3-8B-Instruct
+# model: thu-ml/STAIR-Llama-3.1-8B-SFT
 # model: Google/gemini
 # model: Amazon/claude
 # model: lmsys/vicuna-7b-v1.5
@@ -13,6 +13,5 @@ max_new_tokens: 512
 top_p: 0.9
 top_k: 50
 do_sample: True
-
 dtype: "bfloat16"
 use_vllm: True

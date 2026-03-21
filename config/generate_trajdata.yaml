@@ -1,15 +1,13 @@
 seed: 233
 iter: 20
-seed_prompts_file: data/HarmBench.json
+seed_prompts_file: data/sft.json
 task_name: sftData
 output_path: data/raw_data/{task_name}/
 reward_url: local
 trees_per_batch: 10
 batch_size: 50
 whether_sft: True
-child_num_list: [4, 4, 4, 3]
-# child_num_list: [4,3,3]
+child_num_list: [5, 4, 3, 3]
 use_strategy: True
 p_average_strategy: "uniform"
 able_to_reselected: True
-score_type: "UCB"

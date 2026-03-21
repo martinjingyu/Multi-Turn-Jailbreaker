@@ -41,7 +41,7 @@ def main():
     attack_agent = AttackAgent(attacker_config)
     target = TargetModel(target_cfg)
     
-    os.environ["CUDA_VISIBLE_DEVICES"] = '3'
+    os.environ["CUDA_VISIBLE_DEVICES"] = '2'
     torch.cuda.set_device(0)
     evaluator = LlamaGuardModeration()
     generator = TreeGenerator(cfg, attack_agent, target, evaluator)
