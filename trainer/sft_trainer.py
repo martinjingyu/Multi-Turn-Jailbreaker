@@ -97,7 +97,7 @@ def train():
     
     
     
-    trainer = Trainer(model_init=model_init, tokenizer=tokenizer, args=training_args, **data_module)
+    trainer = Trainer(model_init=model_init, args=training_args, **data_module)
     learning_rate=(training_args.learning_rate)
     print(f"Learning rate: {learning_rate} ({type(learning_rate)})")
     trainer.train()  # resume
