@@ -1,6 +1,406 @@
-This is the code for: 
+Multi-Turn-Jailbreaker
+======================
 
-1. git clone git@github.com:martinjingyu/Multi-Turn-Jailbreaker.git
+This repository contains code for three main stages:
+
+1. `generate`: build multi-turn attack trees and trajectory data
+2. `sft`: supervised fine-tuning of the attacker model
+3. `TreeRPO`: phase-based rollout + GRPO-style training
 
 
-2. conda create -n Mul python=3.12
+Quick Start
+-----------
+
+Clone the repo and create the environment:
+
+```bash
+git clone https://anonymous.4open.science/r/Multi-Turn-Jailbreaker-DBF2/
+cd Multi-Turn-Jailbreaker
+
+conda create -n Mul python=3.12 -y
+conda activate Mul
+
+pip install -r requirements.txt
+```
+
+Recommended environment variables:
+
+```bash
+export PYTHONPATH=$(pwd):$PYTHONPATH
+export VLLM_ALLOW_INSECURE_SERIALIZATION=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+
+Project Layout
+--------------
+
+Main entrypoints:
+
+- `datagenerator/do_generate.py`: generate tree trajectories
+- `trainer/sft_trainer.py`: supervised fine-tuning
+- `trainer/orchestrator.py`: phase-based rollout / training launcher
+- `trainer/grpo_train_phase.py`: pure TreeRPO training phase
+
+Main configs:
+
+- `config/attacker_config.yaml`
+- `config/target_config.yaml`
+- `config/generate_trajdata.yaml`
+- `config/grpo_generate.yaml`
+- `config/sft_config.yaml`
+- `config/ds_config.json`
+
+Seed prompt files:
+
+- `data/sft.json`: seeds used for trajectory generation for SFT
+- `data/rl.json`: seeds used for TreeRPO / RL-style training
+
+
+1. Generate Trajectory Data
+---------------------------
+
+The generation script builds multi-turn attack trees and saves them as JSON files.
+
+Main script:
+
+```bash
+python datagenerator/do_generate.py --start_idx 0 --end_idx 100 --prompt_seed sft
+```
+
+Arguments:
+
+- `--start_idx`: start prompt index
+- `--end_idx`: end prompt index
+- `--prompt_seed`: which prompt file to use
+  - `sft` -> `data/sft.json`
+  - `rl` -> if you adapt the script/config accordingly
+
+Output:
+
+- generated trees are saved under the directory defined by `config/generate_trajdata.yaml`
+- by default this is:
+
+```bash
+data/raw_data/sftData/
+```
+
+Useful config:
+
+- `config/generate_trajdata.yaml`
+  - `trees_per_batch`
+  - `child_num_list`
+  - `use_strategy`
+  - `output_path`
+
+Example single-GPU run:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python datagenerator/do_generate.py \
+  --start_idx 0 \
+  --end_idx 100 \
+  --prompt_seed sft
+```
+
+Legacy helper script:
+
+```bash
+bash scripts/do_generate.bash 0 100
+```
+
+Important note:
+
+- `datagenerator/do_generate.py` still contains some hard-coded device behavior for the evaluator path
+- if you run into device-placement issues, check that file first
+- for large-scale phase-based training, use the newer `trainer/orchestrator.py` path described below
+
+
+2. SFT
+------
+
+SFT trains the attacker model on generated supervision data.
+
+Main script:
+
+```bash
+python trainer/sft_trainer.py
+```
+
+Recommended multi-GPU launch:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2 torchrun --nproc_per_node=3 trainer/sft_trainer.py
+```
+
+There is also a helper script:
+
+```bash
+bash scripts/sft_train.bash
+```
+
+Main SFT config:
+
+- `config/sft_config.yaml`
+
+Important fields:
+
+- `model_name`: base model to fine-tune
+- `data_path`: training data path
+- `output_dir`: checkpoint output
+- `model_max_length`
+- `per_device_train_batch_size`
+- `gradient_accumulation_steps`
+- `learning_rate`
+
+Default paths:
+
+- training data:
+
+```bash
+data/raw_data/sftData
+```
+
+- output checkpoints:
+
+```bash
+checkpoints/sft_warmup
+```
+
+Typical workflow:
+
+1. Generate data into `data/raw_data/sftData`
+2. Edit `config/sft_config.yaml` if needed
+3. Run `torchrun --nproc_per_node=<N> trainer/sft_trainer.py`
+
+
+3. TreeRPO
+----------
+
+The current recommended TreeRPO path is the new phase-based pipeline:
+
+- `trainer/topology.py`
+- `trainer/orchestrator.py`
+- `trainer/ref_server.py`
+- `trainer/gen_worker.py`
+- `trainer/remote_evaluator.py`
+- `trainer/grpo_train_phase.py`
+
+This replaces the older tightly coupled script:
+
+- `trainer/grpo_vllm_one.py`
+
+If you are starting fresh, use the new orchestrator path.
+
+
+3.1 TreeRPO Overview
+--------------------
+
+The new layout uses:
+
+- 1 dedicated service GPU
+  - ref model
+  - LlamaGuard judge
+- remaining GPUs as actor / training GPUs
+
+Phases:
+
+1. `rollout`
+   - actor workers generate trajectories
+   - actor workers send judge requests to the service worker
+   - service worker produces ref / judge results
+2. `train`
+   - DeepSpeed runs on actor GPUs only
+   - trainer consumes batches from the service worker
+
+
+3.2 Inspect GPU Topology
+------------------------
+
+Dry-run the topology first:
+
+```bash
+python trainer/topology.py --gpus 0,1,2,3
+```
+
+Or through the orchestrator:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1,2,3 --dry-run
+```
+
+
+3.3 Rollout Phase
+-----------------
+
+Dry-run rollout:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1 --phase rollout --dry-run
+```
+
+Actual rollout launch:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1 --phase rollout
+```
+
+For 4 GPUs:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1,2,3 --phase rollout
+```
+
+What this does:
+
+- `GPU 0`: runs `trainer/ref_server.py`
+- `GPU 1..N-1`: run `trainer/gen_worker.py`
+
+
+3.4 Training Phase
+------------------
+
+Dry-run training:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1 --phase train --dry-run
+```
+
+Actual training launch:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1 --phase train
+```
+
+For 4 GPUs:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1,2,3 --phase train
+```
+
+This launches:
+
+- `trainer/ref_server.py` on the service GPU
+- `deepspeed trainer/grpo_train_phase.py` on actor GPUs only
+
+You can also start the training phase manually.
+
+Example for 2 GPUs:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 ENABLE_LLAMA_GUARD=1 REF_SERVER_PORT=59875 python trainer/ref_server.py
+```
+
+In another terminal:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 deepspeed --num_gpus 1 trainer/grpo_train_phase.py \
+  --model-path MartinJYHuang/JA-v1 \
+  --ref-server http://127.0.0.1:59875
+```
+
+Example for 4 GPUs:
+
+```bash
+CUDA_VISIBLE_DEVICES=1,2,3 deepspeed --num_gpus 3 trainer/grpo_train_phase.py \
+  --model-path MartinJYHuang/JA-v1 \
+  --ref-server http://127.0.0.1:59875
+```
+
+
+3.5 TreeRPO Config Notes
+------------------------
+
+Relevant files:
+
+- `config/grpo_generate.yaml`: rollout tree generation behavior
+- `config/attacker_config.yaml`: attacker model
+- `config/target_config.yaml`: target model
+- `config/ds_config.json`: DeepSpeed config
+
+TreeRPO prompt seeds are currently loaded from:
+
+```bash
+data/rl.json
+```
+
+This happens inside:
+
+- `trainer/ppo_utils.py`
+
+
+3.6 Current Status / Practical Notes
+------------------------------------
+
+The new TreeRPO pipeline is under active refactoring.
+
+Recommended scripts:
+
+- use `trainer/orchestrator.py`
+- use `trainer/grpo_train_phase.py`
+- use `trainer/ref_server.py`
+
+Legacy script:
+
+- `trainer/grpo_vllm_one.py`
+
+Current limitations:
+
+- rollout and training are separated into phases, but the full automatic phase-switch loop is still evolving
+- some older code paths still contain legacy synchronization assumptions
+- for smoke testing and debugging, use:
+  - `MULTI_GPU_SMOKE_TEST.md`
+
+
+4. Debugging Tips
+-----------------
+
+Check service health:
+
+```bash
+curl http://127.0.0.1:59875/health
+```
+
+Dry-run before launching:
+
+```bash
+python trainer/orchestrator.py --gpus 0,1 --phase rollout --dry-run
+python trainer/orchestrator.py --gpus 0,1 --phase train --dry-run
+```
+
+If you hit judge request size errors such as HTTP 413:
+
+- the client now chunks judge requests in `trainer/remote_evaluator.py`
+- if it still happens, reduce request size further or trim histories before judging
+
+
+5. Minimal End-to-End Order
+---------------------------
+
+If you want the shortest path through the repo:
+
+1. Generate SFT data
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python datagenerator/do_generate.py --start_idx 0 --end_idx 100 --prompt_seed sft
+```
+
+2. Run SFT
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2 torchrun --nproc_per_node=3 trainer/sft_trainer.py
+```
+
+3. Smoke-test TreeRPO
+
+```bash
+python trainer/orchestrator.py --gpus 0,1 --phase rollout --dry-run
+python trainer/orchestrator.py --gpus 0,1 --phase train --dry-run
+```
+
+4. Run TreeRPO rollout / train manually
+
+```bash
+python trainer/orchestrator.py --gpus 0,1 --phase rollout
+python trainer/orchestrator.py --gpus 0,1 --phase train
+```
+
