@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import gc
 import json
-import math
 import os
 import sys
 import time
@@ -36,6 +35,7 @@ TRAIN_BATCH_SIZE = 1
 MAX_TOKEN_LEN = 6144
 COMPUTE_GEN_LOGPS = True
 DEFAULT_REF_SERVER = "http://localhost:59875"
+DEFAULT_MODEL_PATH = MODEL_PATH
 
 
 def _int_env(name: str, default: int) -> int:
@@ -95,12 +95,17 @@ def reload_attacker_model(attacker: AttackAgent, model_path: str) -> None:
 def build_generator(
     ref_server_url: str,
     use_remote_judge: bool,
+    model_path: str = "",
 ) -> tuple[AutoTokenizer, list[str], SamplingParams, TreeGenerator, SimpleNamespace]:
     target_cfg = load_yaml_config(str(PROJECT_ROOT / "config" / "target_config.yaml"))
     generator_cfg = load_yaml_config(str(PROJECT_ROOT / "config" / "grpo_generate.yaml"))
     attacker_config = load_yaml_config(str(PROJECT_ROOT / "config" / "attacker_config.yaml"))
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    # Allow the orchestrator to override the attacker model (e.g. latest checkpoint).
+    effective_model_path = model_path if model_path else attacker_config.model
+    attacker_config.model = effective_model_path
+
+    tokenizer = AutoTokenizer.from_pretrained(effective_model_path)
     prompt_seeds = load_seeds()
     gen_logps_sp = SamplingParams(temperature=0, top_p=1, max_tokens=1, prompt_logprobs=1)
 
@@ -259,71 +264,87 @@ def upload_training_batches(
 
 def run_worker(
     actor_rank: int,
+    num_actor_workers: int,
     physical_gpu_id: int,
     ref_server: str,
     use_remote_judge: bool,
+    model_path: str = "",
+    rollout_iter: int = 0,
+    trees_per_worker: int = 5,
 ) -> None:
     try:
         print(
-            f"[gen_worker] actor_rank={actor_rank}, physical_gpu_id={physical_gpu_id}, "
+            f"[gen_worker] actor_rank={actor_rank}/{num_actor_workers}, "
+            f"physical_gpu_id={physical_gpu_id}, "
             f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}, "
-            f"use_remote_judge={use_remote_judge}"
+            f"use_remote_judge={use_remote_judge}, "
+            f"rollout_iter={rollout_iter}, trees_per_worker={trees_per_worker}, "
+            f"model_path={model_path or '(default)'}"
         )
         torch.cuda.set_device(0)
 
         tokenizer, prompt_seeds, gen_logps_sp, generator, _ = build_generator(
             ref_server_url=ref_server,
             use_remote_judge=use_remote_judge,
+            model_path=model_path,
         )
         attacker = generator.attacker
-
-        num_batches = math.ceil(len(prompt_seeds) / generator.cfg.trees_per_batch)
         worker_label = f"actor{actor_rank}_gpu{physical_gpu_id}"
 
-        for iteration in range(num_batches):
-            try:
-                print(f"[gen_worker] ===== Generation Iteration {iteration} =====")
-                wait_for_new_weight(iteration, attacker)
+        # Each worker is responsible for exactly one contiguous slice of seeds.
+        # Seeds are partitioned across both iterations and workers:
+        #   global_batch = rollout_iter * num_actor_workers + actor_rank
+        #   seeds[global_batch * trees_per_worker : (global_batch+1) * trees_per_worker]
+        global_batch = rollout_iter * num_actor_workers + actor_rank
+        start = global_batch * trees_per_worker
+        seed_batch = prompt_seeds[start : start + trees_per_worker]
 
-                seed_batch = prompt_seeds[
-                    iteration * generator.cfg.trees_per_batch :
-                    iteration * generator.cfg.trees_per_batch + generator.cfg.trees_per_batch
-                ]
+        if not seed_batch:
+            print(
+                f"[gen_worker] No seeds remaining for rollout_iter={rollout_iter}, "
+                f"actor_rank={actor_rank} (start={start} >= {len(prompt_seeds)}). Exiting."
+            )
+            return
 
-                prompt_inputs, rewards, answers, ans_token_ids = gen_samples(
-                    seed_batch,
-                    iteration,
-                    generator,
-                    tokenizer,
-                    worker_label,
-                )
+        print(
+            f"[gen_worker] Generating {len(seed_batch)} trees "
+            f"(prompt indices {start}–{start + len(seed_batch) - 1} of {len(prompt_seeds)})..."
+        )
 
-                print("[gen_worker] Start uploading...")
-                upload_training_batches(
-                    prompt_inputs=prompt_inputs,
-                    rewards=rewards,
-                    answers=answers,
-                    ans_token_ids=ans_token_ids,
-                    tokenizer=tokenizer,
-                    attacker=attacker,
-                    gen_logps_sp=gen_logps_sp,
-                    ref_server=ref_server,
-                )
-            except Exception:
-                print("=" * 80)
-                print("[ERROR] Exception in gen_worker loop!")
-                traceback.print_exc()
-                print("=" * 80)
-                sys.stdout.flush()
-                time.sleep(0.5)
-                raise
+        try:
+            prompt_inputs, rewards, answers, ans_token_ids = gen_samples(
+                seed_batch,
+                rollout_iter,
+                generator,
+                tokenizer,
+                worker_label,
+            )
+
+            print("[gen_worker] Uploading batches...")
+            upload_training_batches(
+                prompt_inputs=prompt_inputs,
+                rewards=rewards,
+                answers=answers,
+                ans_token_ids=ans_token_ids,
+                tokenizer=tokenizer,
+                attacker=attacker,
+                gen_logps_sp=gen_logps_sp,
+                ref_server=ref_server,
+            )
+            print("[gen_worker] Done.")
+        except Exception:
+            print("=" * 80)
+            print("[ERROR] Exception in gen_worker!")
+            traceback.print_exc()
+            print("=" * 80)
+            sys.stdout.flush()
+            raise
     except Exception:
         print("=" * 80)
-        print("[ERROR] Exception before gen_worker loop!")
+        print("[ERROR] Exception in gen_worker setup!")
         traceback.print_exc()
         print("=" * 80)
         sys.stdout.flush()
-        time.sleep(0.5)
         raise
 
 
@@ -341,13 +362,41 @@ def main() -> int:
         action="store_true",
         default=_bool_env("USE_REMOTE_JUDGE", False),
     )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=_str_env("ATTACKER_MODEL_PATH", ""),
+        help="Path to the attacker model.  Overrides the model field in attacker_config.yaml.",
+    )
+    parser.add_argument(
+        "--rollout-iter",
+        type=int,
+        default=_int_env("ROLLOUT_ITER", 0),
+        help="Global rollout iteration index (set by orchestrator).",
+    )
+    parser.add_argument(
+        "--num-actor-workers",
+        type=int,
+        default=_int_env("NUM_ACTOR_WORKERS", 1),
+        help="Total number of gen_worker processes in this rollout phase.",
+    )
+    parser.add_argument(
+        "--trees-per-worker",
+        type=int,
+        default=_int_env("TREES_PER_WORKER", 5),
+        help="Number of trees this worker generates per iteration (default: 5).",
+    )
     args = parser.parse_args()
 
     run_worker(
         actor_rank=args.actor_rank,
+        num_actor_workers=args.num_actor_workers,
         physical_gpu_id=args.physical_gpu_id,
         ref_server=args.ref_server,
         use_remote_judge=args.use_remote_judge,
+        model_path=args.model_path,
+        rollout_iter=args.rollout_iter,
+        trees_per_worker=args.trees_per_worker,
     )
     return 0
 

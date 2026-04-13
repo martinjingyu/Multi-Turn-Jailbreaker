@@ -40,7 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-save-total", type=int, default=5)
     parser.add_argument("--idle-seconds", type=int, default=600)
     parser.add_argument("--poll-interval", type=int, default=10)
-    parser.add_argument("--compute-gen-logps", action="store_true", default=True)
+    parser.add_argument(
+        "--compute-gen-logps",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether gen_workers computed per-token logprobs at rollout time (default: True).",
+    )
     parser.add_argument("--upload-hf-repo", type=str, default="")
     return parser.parse_args()
 

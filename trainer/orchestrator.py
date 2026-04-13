@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
 import signal
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from glob import glob
 from pathlib import Path
 
 from topology import ClusterTopology, build_topology, visible_device_env
@@ -65,9 +68,13 @@ def build_service_spec(
 def build_rollout_specs(
     topology: ClusterTopology,
     ref_server_url: str,
+    model_path: str = "",
+    rollout_iter: int = 0,
+    trees_per_worker: int = 5,
     script_path: Path | None = None,
 ) -> list[ProcessSpec]:
     script_path = script_path or (THIS_DIR / "gen_worker.py")
+    num_actor_workers = len(topology.actor_gpus)
     specs: list[ProcessSpec] = []
 
     for actor_rank, gpu_id in enumerate(topology.actor_gpus):
@@ -78,6 +85,11 @@ def build_rollout_specs(
         env["PHYSICAL_GPU_ID"] = str(gpu_id)
         env["REF_SERVER_URL"] = ref_server_url
         env["USE_REMOTE_JUDGE"] = "1"
+        env["ROLLOUT_ITER"] = str(rollout_iter)
+        env["NUM_ACTOR_WORKERS"] = str(num_actor_workers)
+        env["TREES_PER_WORKER"] = str(trees_per_worker)
+        if model_path:
+            env["ATTACKER_MODEL_PATH"] = model_path
 
         specs.append(
             ProcessSpec(
@@ -91,6 +103,13 @@ def build_rollout_specs(
         )
 
     return specs
+
+
+def get_num_seeds() -> int:
+    """Read the RL seed file and return the number of prompts."""
+    seeds_path = PROJECT_ROOT / "data" / "rl.json"
+    with open(seeds_path) as f:
+        return len(json.load(f))
 
 
 def build_train_spec(
@@ -309,6 +328,180 @@ def run_train_phase(
         terminate_processes(processes)
 
 
+def find_latest_checkpoint(save_dir: str) -> str:
+    checkpoints = glob(os.path.join(save_dir, "step_*"))
+    if not checkpoints:
+        raise ValueError(f"No checkpoint directories found in {save_dir}.")
+    return max(checkpoints, key=lambda x: int(x.rsplit("_", 1)[-1]))
+
+
+def run_loop(
+    topology: ClusterTopology,
+    ref_server_port: int,
+    model_path: str,
+    save_dir: str,
+    ds_config_path: str,
+    train_batch_size: int,
+    gradient_accumulation_steps: int,
+    all_steps: int,
+    save_every: int,
+    max_save_total: int,
+    idle_seconds: int,
+    poll_interval: int,
+    lr: float,
+    beta: float,
+    clip_param: float,
+    upload_hf_repo: str,
+    trees_per_worker: int,
+    iterations: int,
+    dry_run: bool,
+) -> int:
+    """
+    Full GRPO training loop.
+
+    Seeds are partitioned across both workers and iterations so that each
+    worker generates exactly `trees_per_worker` trees per iteration:
+
+        global_batch = rollout_iter * num_actor_workers + actor_rank
+        seeds[global_batch * trees_per_worker : (global_batch+1) * trees_per_worker]
+
+    Total iterations are auto-computed as ceil(num_seeds / trees_per_worker /
+    num_actor_gpus).  Pass --iterations to cap or override that number.
+
+    The ref_server is started once and kept alive for all iterations.
+    """
+    ref_server_url = f"http://127.0.0.1:{ref_server_port}"
+    service_spec = build_service_spec(topology, port=ref_server_port)
+
+    num_seeds = get_num_seeds()
+    num_actor_workers = topology.num_actor_gpus
+    auto_iterations = math.ceil(num_seeds / trees_per_worker / num_actor_workers)
+    total_iterations = iterations if iterations > 0 else auto_iterations
+
+    print(
+        f"[orchestrator] seeds={num_seeds}, trees_per_worker={trees_per_worker}, "
+        f"actor_workers={num_actor_workers} → "
+        f"auto_iterations={auto_iterations}, running={total_iterations}"
+    )
+
+    if dry_run:
+        rollout_specs = build_rollout_specs(
+            topology, ref_server_url,
+            model_path=model_path,
+            rollout_iter=0,
+            trees_per_worker=trees_per_worker,
+        )
+        train_spec = build_train_spec(
+            topology=topology,
+            ref_server_url=ref_server_url,
+            model_path=model_path,
+            save_dir=save_dir,
+            ds_config_path=ds_config_path,
+            train_batch_size=train_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            all_steps=all_steps,
+            save_every=save_every,
+            max_save_total=max_save_total,
+            idle_seconds=idle_seconds,
+            poll_interval=poll_interval,
+            lr=lr,
+            beta=beta,
+            clip_param=clip_param,
+            upload_hf_repo=upload_hf_repo,
+        )
+        print_plan(topology, [service_spec, *rollout_specs, train_spec])
+        print("")
+        print(f"[orchestrator] dry-run: {total_iterations} iteration(s) planned, no processes started.")
+        return 0
+
+    # Start the ref_server once; it persists across all rollout+train iterations.
+    print("[orchestrator] Starting ref_server (kept alive for all iterations)...")
+    service_proc = launch_processes([service_spec])[0]
+    current_model_path = model_path
+
+    try:
+        for i in range(total_iterations):
+            print(f"\n[orchestrator] ========== GRPO Iteration {i + 1}/{total_iterations} ==========\n")
+
+            # -- Rollout phase --
+            rollout_specs = build_rollout_specs(
+                topology, ref_server_url,
+                model_path=current_model_path,
+                rollout_iter=i,
+                trees_per_worker=trees_per_worker,
+            )
+            print(
+                f"[orchestrator] Rollout {i + 1}: each worker generates seeds "
+                f"[{i * num_actor_workers * trees_per_worker} .. "
+                f"{(i + 1) * num_actor_workers * trees_per_worker - 1}], "
+                f"model={current_model_path}"
+            )
+            rollout_procs = launch_processes(rollout_specs)
+
+            # Wait for every gen_worker to finish uploading its batches.
+            for proc, spec in zip(rollout_procs, rollout_specs):
+                ret = proc.wait()
+                if ret != 0:
+                    print(f"[orchestrator] {spec.name} exited with code {ret}, aborting loop.")
+                    return ret
+
+            if service_proc.poll() is not None:
+                print(f"[orchestrator] ref_server exited unexpectedly "
+                      f"(code {service_proc.returncode}), aborting.")
+                return service_proc.returncode or 1
+
+            print(f"[orchestrator] Rollout phase {i + 1} complete.")
+
+            # -- Train phase --
+            train_spec = build_train_spec(
+                topology=topology,
+                ref_server_url=ref_server_url,
+                model_path=current_model_path,
+                save_dir=save_dir,
+                ds_config_path=ds_config_path,
+                train_batch_size=train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                all_steps=all_steps,
+                save_every=save_every,
+                max_save_total=max_save_total,
+                idle_seconds=idle_seconds,
+                poll_interval=poll_interval,
+                lr=lr,
+                beta=beta,
+                clip_param=clip_param,
+                upload_hf_repo=upload_hf_repo,
+            )
+            print(f"[orchestrator] Starting train phase {i + 1}...")
+            train_proc = launch_processes([train_spec])[0]
+            ret = train_proc.wait()
+            if ret != 0:
+                print(f"[orchestrator] trainer exited with code {ret}, aborting loop.")
+                return ret
+
+            if service_proc.poll() is not None:
+                print(f"[orchestrator] ref_server exited unexpectedly "
+                      f"(code {service_proc.returncode}), aborting.")
+                return service_proc.returncode or 1
+
+            print(f"[orchestrator] Train phase {i + 1} complete.")
+
+            # -- Update model path for next rollout --
+            try:
+                current_model_path = find_latest_checkpoint(save_dir)
+                print(f"[orchestrator] Updated attacker model → {current_model_path}")
+            except ValueError as exc:
+                print(f"[orchestrator] Warning: {exc}  Keeping previous model path.")
+
+        print(f"\n[orchestrator] GRPO loop finished ({total_iterations} iteration(s)).")
+        return 0
+
+    except KeyboardInterrupt:
+        print("\n[orchestrator] received Ctrl+C, shutting down.")
+        return 0
+    finally:
+        terminate_processes([service_proc])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Phase-based GRPO orchestrator.")
     parser.add_argument(
@@ -333,8 +526,29 @@ def main() -> int:
         "--phase",
         type=str,
         default="rollout",
-        choices=["rollout", "train"],
-        help="Which phase to run.",
+        choices=["rollout", "train", "loop"],
+        help=(
+            "Which phase to run.  "
+            "'rollout' starts gen_workers + ref_server;  "
+            "'train' starts trainer + ref_server;  "
+            "'loop' runs N full rollout→train iterations automatically "
+            "(use --iterations to set N)."
+        ),
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=-1,
+        help=(
+            "Number of rollout→train iterations (--phase loop only).  "
+            "Default -1 = auto-compute from ceil(num_seeds / trees_per_worker / num_actor_gpus)."
+        ),
+    )
+    parser.add_argument(
+        "--trees-per-worker",
+        type=int,
+        default=5,
+        help="Trees each gen_worker generates per iteration (default: 5).",
     )
     parser.add_argument("--model-path", type=str, default="MartinJYHuang/JA-v1")
     parser.add_argument("--save-dir", type=str, default="checkpoints")
@@ -388,6 +602,28 @@ def main() -> int:
             beta=args.beta,
             clip_param=args.clip_param,
             upload_hf_repo=args.upload_hf_repo,
+            dry_run=args.dry_run,
+        )
+    if args.phase == "loop":
+        return run_loop(
+            topology=topology,
+            ref_server_port=args.ref_server_port,
+            model_path=args.model_path,
+            save_dir=args.save_dir,
+            ds_config_path=args.ds_config,
+            train_batch_size=args.train_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            all_steps=args.all_steps,
+            save_every=args.save_every,
+            max_save_total=args.max_save_total,
+            idle_seconds=args.idle_seconds,
+            poll_interval=args.poll_interval,
+            lr=args.lr,
+            beta=args.beta,
+            clip_param=args.clip_param,
+            upload_hf_repo=args.upload_hf_repo,
+            trees_per_worker=args.trees_per_worker,
+            iterations=args.iterations,
             dry_run=args.dry_run,
         )
 
