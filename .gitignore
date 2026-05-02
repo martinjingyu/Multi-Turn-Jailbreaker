@@ -5,3 +5,17 @@ __pycache__/
 tmp/
 /api.config
 model/Target/api.config
+
+# Python cache
+
+__pycache__/
+
+*.pyc
+
+# temp
+
+tmp/
+
+# config
+
+model/Target/api.config
