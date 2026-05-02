@@ -14,7 +14,7 @@ config_path = os.path.join(os.path.dirname(__file__), "api.config")
 config.read(config_path)
 
 subscription_key = config["DEFAULT"]["subscription_key"]
-api_version = "2026-3-15-preview"
+api_version = "2024-12-01-preview"
 
 
 class GPT54():
