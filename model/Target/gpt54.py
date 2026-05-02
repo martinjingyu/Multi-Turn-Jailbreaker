@@ -32,18 +32,14 @@ class GPT54():
             try:
                 response = self.client.chat.completions.create(
                     messages=messages,
-                    max_tokens=512,
-                    temperature=1.0,
-                    top_p=1.0,
+                    max_completion_tokens=16384,
                     model=deployment
                 )
                 content = response.choices[0].message.content
             except:
                 response = self.client.chat.completions.create(
                     messages=messages,
-                    max_tokens=512,
-                    temperature=1.0,
-                    top_p=1.0,
+                    max_completion_tokens=16384,
                     model=deployment
                 )
                 content = response.choices[0].message.content
