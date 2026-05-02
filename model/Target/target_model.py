@@ -39,6 +39,10 @@ class TargetModel():
             self.sampling_params = SamplingParams(n=1, temperature=config.temperature, max_tokens = config.max_new_tokens)
             self.tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
         
+        elif "gpt-5.4" in config.model:
+            from .gpt54 import GPT54
+            self.model = GPT54()
+
         elif "gpt" in config.model:
             from .gpt4 import GPT4
             self.model = GPT4()
