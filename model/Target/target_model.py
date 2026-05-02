@@ -86,13 +86,15 @@ class TargetModel():
             
         elif "vicuna" in self.config.model:
             inputs_text = self.convert_messages_to_vicuna_prompts(messages_list)
-            
-        
+
+        elif "gpt" in self.config.model or "gemini" in self.config.model or "claude" in self.config.model:
+            return self.model.batch_response(messages_list)
+
         else:
-            inputs_text = self.tokenizer.apply_chat_template(messages_list, 
+            inputs_text = self.tokenizer.apply_chat_template(messages_list,
                 add_generation_prompt=True,
                 tokenize=False)
-            
+
         # print(inputs_text)
         complete = self.model.generate(inputs_text, sampling_params=self.sampling_params, use_tqdm=False)
         output = []
