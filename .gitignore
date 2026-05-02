@@ -3,3 +3,4 @@ checkpoints/
 data/
 __pycache__/
 tmp/
+api.config
