@@ -4,7 +4,7 @@ import os
 from openai import AzureOpenAI
 import configparser
 from tqdm import tqdm
-endpoint = "https://intern-jingyu-jh-east.openai.azure.com/"
+endpoint = "https://intern-jingyu-jhu-east.openai.azure.com/"
 model_name = "gpt-4o"
 deployment = "gpt-4o"
 config = configparser.ConfigParser()

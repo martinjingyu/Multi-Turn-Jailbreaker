@@ -16,13 +16,13 @@ def make_unique_dir(base_dir):
     while os.path.exists(new_dir):
         new_dir = f"{base_dir}-{counter}"
         counter += 1
-    os.makedirs(new_dir)
+    os.makedirs(new_dir, exist_ok=True)
     return new_dir
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate pipeline")
-    parser.add_argument('--method', type=str, required=True, help='Attacker model HuggingFace ID')
+    parser = argparse.ArgumentParser(description="Evaluate jailbreak agent on HarmBench")
+    parser.add_argument('--method', type=str, required=True, help='Attacker model HuggingFace ID, e.g. MartinJYHuang/JA-v2')
     args = parser.parse_args()
 
     with open("config/target_config.yaml", "r") as f:
@@ -53,9 +53,12 @@ if __name__ == "__main__":
         prompts_data = json.load(f)
     inputs = [p["prompt"] for p in prompts_data]
 
+    # Result path: data/result/{org}/{model_name}-{target_name}
+    # e.g. data/result/MartinJYHuang/JA-v2-Meta-Llama-3-8B-Instruct
+    org = args.method.split('/')[0]
+    model_name = args.method.split('/')[1]
     target_name = target_cfg.model.split('/')[-1]
-    method_name = args.method.replace('/', '-')
-    path = make_unique_dir(f"data/result/{method_name}-{target_name}")
+    path = make_unique_dir(f"data/result/{org}/{model_name}-{target_name}")
 
     root_list = [Node("root", None, seed, None, 0, None, None, None) for seed in inputs]
     for i in range(0, len(root_list), generator_cfg.trees_per_batch):
