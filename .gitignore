@@ -4,3 +4,4 @@ data/
 __pycache__/
 tmp/
 /api.config
+model/Target/api.config

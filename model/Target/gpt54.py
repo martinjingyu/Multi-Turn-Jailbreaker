@@ -1,9 +1,9 @@
 #### GPT-5.4
 
 import os
-from openai import AzureOpenAI
 import configparser
-from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from openai import AzureOpenAI
 
 endpoint = "https://intern-jingyu-jhu-east.openai.azure.com/"
 model_name = "gpt-5.4"
@@ -16,6 +16,8 @@ config.read(config_path)
 subscription_key = config["DEFAULT"]["subscription_key"]
 api_version = "2024-12-01-preview"
 
+MAX_WORKERS = 16
+
 
 class GPT54():
     def __init__(self):
@@ -26,22 +28,29 @@ class GPT54():
             api_key=subscription_key,
         )
 
+    def _single_request(self, messages):
+        try:
+            response = self.client.chat.completions.create(
+                messages=messages,
+                max_completion_tokens=16384,
+                model=deployment
+            )
+        except Exception:
+            response = self.client.chat.completions.create(
+                messages=messages,
+                max_completion_tokens=16384,
+                model=deployment
+            )
+        return response.choices[0].message.content
+
     def batch_response(self, messages_list):
-        responses = []
-        for idx, messages in tqdm(enumerate(messages_list), total=len(messages_list)):
-            try:
-                response = self.client.chat.completions.create(
-                    messages=messages,
-                    max_completion_tokens=16384,
-                    model=deployment
-                )
-                content = response.choices[0].message.content
-            except:
-                response = self.client.chat.completions.create(
-                    messages=messages,
-                    max_completion_tokens=16384,
-                    model=deployment
-                )
-                content = response.choices[0].message.content
-            responses.append(content)
-        return responses
+        results = [None] * len(messages_list)
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_idx = {
+                executor.submit(self._single_request, messages): idx
+                for idx, messages in enumerate(messages_list)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
+        return results
