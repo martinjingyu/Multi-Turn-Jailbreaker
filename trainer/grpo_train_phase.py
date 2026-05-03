@@ -211,7 +211,13 @@ def main() -> int:
     for step in progress:
         batch = get_batch(args.ref_server)
 
-        if batch is None:
+        # Synchronize batch availability across all ranks.
+        # If any rank got no batch, all ranks skip this step to avoid deadlock in
+        # collective ops (engine.backward/step require all ranks to participate).
+        has_batch = torch.tensor([0 if batch is None else 1], dtype=torch.int, device=engine.device)
+        dist.all_reduce(has_batch, op=dist.ReduceOp.MIN)
+
+        if not has_batch.item():
             if idle_start is None:
                 idle_start = time.time()
 
@@ -234,21 +240,19 @@ def main() -> int:
 
         idle_start = None
 
-        while batch is not None:
-            loss = grpo_step(
-                batch=batch,
-                engine=engine,
-                tokenizer=tokenizer,
-                beta=args.beta,
-                clip_param=args.clip_param,
-                compute_gen_logps=args.compute_gen_logps,
-            )
-            engine.backward(loss)
-            engine.step()
+        loss = grpo_step(
+            batch=batch,
+            engine=engine,
+            tokenizer=tokenizer,
+            beta=args.beta,
+            clip_param=args.clip_param,
+            compute_gen_logps=args.compute_gen_logps,
+        )
+        engine.backward(loss)
+        engine.step()
 
-            last_loss = loss.item()
-            total_batches += 1
-            batch = get_batch(args.ref_server)
+        last_loss = loss.item()
+        total_batches += 1
 
         dist.barrier()
 
