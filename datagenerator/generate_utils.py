@@ -314,35 +314,16 @@ class TreeGenerator():
 
     def pruning(self, root_list: list[Node]):
         for root in root_list:
-            root.reward = "0"
             node_list = root.get_all_nodes()
-            found = False
-            max_node = root
-            
             for node in node_list:
-                if float(node.reward) > 3:
-                    found = True
-                    break
+                sub_tree = node.get_all_nodes()[1:]
+                found = any(float(n.reward) > 3 for n in sub_tree if n.reward is not None)
+                if found:
+                    continue
                 else:
-                    if float(node.reward) > float(max_node.reward):
-                        max_node = node
-                        
-            if found:
-                for node in node_list[1:]:
-                    subtree = node.get_all_nodes()
-                    if not any(float(n.reward) > 3 for n in subtree):
-                        node.children = []
-            else:
-                for node in node_list[1:]:
-                    subtree = node.get_all_nodes()
-                    if max_node not in subtree:
-                        node.children = []
+                    node.children = []
                 
                             
-    def prune_all_children(self,node):
-        for child in node.children:
-            self.prune_all_children(child)
-        node.children = []
     
     def compute_tree_reward(self, root_list: list[Node]):
         for root in root_list:
