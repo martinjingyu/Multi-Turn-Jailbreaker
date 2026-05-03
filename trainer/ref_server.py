@@ -7,6 +7,7 @@ import queue
 import threading
 import traceback
 import uuid
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -58,21 +59,37 @@ def get_per_token_logps(model, input_ids: torch.Tensor) -> torch.Tensor:
     return torch.stack(per_token_logps)
 
 
+# Directory used to hand off upload payloads between rollout and training servers.
+_PENDING_DIR = Path("ppo_data/ref_pending")
+
+
 class RefService:
-    def __init__(self, model_path: str, enable_judge: bool = False):
-        from transformers import AutoModelForCausalLM
-
-        self.model_path = model_path
+    def __init__(
+        self,
+        model_path: str,
+        enable_judge: bool = False,
+        enable_ref_model: bool = True,
+    ):
+        self.enable_ref_model = enable_ref_model
         self.enable_judge = enable_judge
+        self.model_path = model_path
 
-        self.ref_model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-            _attn_implementation="sdpa",
-        ).to("cuda")
-        self.ref_model.eval()
-        self.ref_model.requires_grad_(False)
+        _PENDING_DIR.mkdir(parents=True, exist_ok=True)
 
+        # --- Reference model (only in train mode) ---
+        self.ref_model = None
+        if enable_ref_model:
+            from transformers import AutoModelForCausalLM
+
+            self.ref_model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=torch.bfloat16,
+                _attn_implementation="sdpa",
+            ).to("cuda")
+            self.ref_model.eval()
+            self.ref_model.requires_grad_(False)
+
+        # --- Judge (only in rollout mode) ---
         self.judge = None
         if enable_judge:
             from model.Evaluator.llamaJedge import LlamaGuardModeration
@@ -86,12 +103,42 @@ class RefService:
         self.judge_request_ids: set[str] = set()
         self.judge_lock = threading.Lock()
 
+        # If ref model is enabled, drain any payloads saved by a previous rollout phase.
+        if enable_ref_model:
+            self._load_pending_files()
+
+    def _load_pending_files(self) -> None:
+        pending = sorted(_PENDING_DIR.glob("*.bin"))
+        if pending:
+            print(f"[ref_server] Loading {len(pending)} pending upload(s) from disk...")
+        for fpath in pending:
+            try:
+                with open(fpath, "rb") as f:
+                    raw = f.read()
+                items = bytes_list_to_list(raw)
+                data: dict[str, Any] = {"base": json.loads(items[0])}
+                data["inputs"] = bytes_to_tensor(items[1])
+                data["rewards"] = bytes_to_tensor(items[2])
+                if len(items) == 4:
+                    data["gen_logps"] = bytes_to_tensor(items[3])
+                self.ref_request_queue.put(data)
+                fpath.unlink()
+            except Exception:
+                print(f"[ref_server] Warning: failed to load {fpath}, skipping.")
+                traceback.print_exc()
+
     def handle_ref_upload(self, payload: bytes) -> bytes:
+        if not self.enable_ref_model:
+            # Persist to disk so the training server can process it later.
+            fpath = _PENDING_DIR / f"{uuid.uuid4()}.bin"
+            with open(fpath, "wb") as f:
+                f.write(payload)
+            return b"tensor"
+
         items = bytes_list_to_list(payload)
         if len(items) not in (3, 4):
             return b"tensor"
-
-        data = {"base": json.loads(items[0])}
+        data: dict[str, Any] = {"base": json.loads(items[0])}
         data["inputs"] = bytes_to_tensor(items[1])
         data["rewards"] = bytes_to_tensor(items[2])
         if len(items) == 4:
@@ -122,6 +169,9 @@ class RefService:
             return self.judge_results.pop(request_id)
 
     def run_ref_loop(self) -> None:
+        if not self.enable_ref_model:
+            return
+
         while True:
             data = self.ref_request_queue.get()
             prompt_length = data["base"]["plen"]
@@ -172,11 +222,21 @@ def main() -> int:
     model_path = os.environ.get("REF_MODEL_PATH", "MartinJYHuang/Jailbreak-agent-temp")
     port = int(os.environ.get("REF_SERVER_PORT", "59875"))
     enable_judge = os.environ.get("ENABLE_LLAMA_GUARD", "0") == "1"
+    enable_ref_model = os.environ.get("ENABLE_REF_MODEL", "1") == "1"
     bottle.BaseRequest.MEMFILE_MAX = int(
         os.environ.get("BOTTLE_MEMFILE_MAX_BYTES", str(16 * 1024 * 1024))
     )
 
-    service = RefService(model_path=model_path, enable_judge=enable_judge)
+    print(
+        f"[ref_server] Starting: port={port}, "
+        f"enable_ref_model={enable_ref_model}, enable_judge={enable_judge}"
+    )
+
+    service = RefService(
+        model_path=model_path,
+        enable_judge=enable_judge,
+        enable_ref_model=enable_ref_model,
+    )
     app = bottle.Bottle()
 
     @app.get("/health")
@@ -185,6 +245,7 @@ def main() -> int:
             "status": "ok",
             "model_path": model_path,
             "enable_judge": enable_judge,
+            "enable_ref_model": enable_ref_model,
             "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         }
 

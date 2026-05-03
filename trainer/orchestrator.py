@@ -49,16 +49,29 @@ def _base_env() -> dict[str, str]:
 def build_service_spec(
     topology: ClusterTopology,
     port: int = 59875,
+    mode: str = "rollout",
+    model_path: str = "",
     script_path: Path | None = None,
 ) -> ProcessSpec:
+    """
+    mode="rollout" → judge only  (ENABLE_LLAMA_GUARD=1, ENABLE_REF_MODEL=0)
+    mode="train"   → ref model only (ENABLE_LLAMA_GUARD=0, ENABLE_REF_MODEL=1)
+    """
     script_path = script_path or (THIS_DIR / "ref_server.py")
     env = _base_env()
     env.update(visible_device_env(topology.service_gpu))
     env["REF_SERVER_PORT"] = str(port)
-    env["ENABLE_LLAMA_GUARD"] = "1"
+    if mode == "train":
+        env["ENABLE_LLAMA_GUARD"] = "0"
+        env["ENABLE_REF_MODEL"] = "1"
+    else:
+        env["ENABLE_LLAMA_GUARD"] = "1"
+        env["ENABLE_REF_MODEL"] = "0"
+    if model_path:
+        env["REF_MODEL_PATH"] = model_path
 
     return ProcessSpec(
-        name="service",
+        name=f"service-{mode}",
         role="service",
         physical_gpu_id=topology.service_gpu,
         cmd=[sys.executable, str(script_path)],
@@ -268,7 +281,7 @@ def run_rollout_phase(
     dry_run: bool,
 ) -> int:
     ref_server_url = f"http://127.0.0.1:{ref_server_port}"
-    service_spec = build_service_spec(topology, port=ref_server_port)
+    service_spec = build_service_spec(topology, port=ref_server_port, mode="rollout")
     rollout_specs = build_rollout_specs(topology, ref_server_url=ref_server_url)
     all_specs = [service_spec, *rollout_specs]
 
@@ -325,7 +338,7 @@ def run_train_phase(
     dry_run: bool,
 ) -> int:
     ref_server_url = f"http://127.0.0.1:{ref_server_port}"
-    service_spec = build_service_spec(topology, port=ref_server_port)
+    service_spec = build_service_spec(topology, port=ref_server_port, mode="train", model_path=model_path)
     train_spec = build_train_spec(
         topology=topology,
         ref_server_url=ref_server_url,
@@ -419,10 +432,10 @@ def run_loop(
     Total iterations are auto-computed as ceil(num_seeds / trees_per_worker /
     num_actor_gpus).  Pass --iterations to cap or override that number.
 
-    The ref_server is started once and kept alive for all iterations.
+    The ref_server is restarted each iteration: judge-only during rollout,
+    ref-model-only during training, handing off data via ppo_data/ref_pending/.
     """
     ref_server_url = f"http://127.0.0.1:{ref_server_port}"
-    service_spec = build_service_spec(topology, port=ref_server_port)
 
     num_seeds = get_num_seeds()
     num_actor_workers = topology.num_actor_gpus
@@ -436,6 +449,8 @@ def run_loop(
     )
 
     if dry_run:
+        rollout_service_spec = build_service_spec(topology, port=ref_server_port, mode="rollout")
+        train_service_spec = build_service_spec(topology, port=ref_server_port, mode="train", model_path=model_path)
         rollout_specs = build_rollout_specs(
             topology, ref_server_url,
             model_path=model_path,
@@ -460,24 +475,34 @@ def run_loop(
             clip_param=clip_param,
             upload_hf_repo=upload_hf_repo,
         )
-        print_plan(topology, [service_spec, *rollout_specs, train_spec])
+        print_plan(topology, [rollout_service_spec, *rollout_specs, train_service_spec, train_spec])
         print("")
         print(f"[orchestrator] dry-run: {total_iterations} iteration(s) planned, no processes started.")
         return 0
 
-    # Start the ref_server once; it persists across all rollout+train iterations.
-    print("[orchestrator] Starting ref_server (kept alive for all iterations)...")
-    service_proc = launch_processes([service_spec])[0]
-    if not wait_for_service(service_proc, ref_server_url):
-        terminate_processes([service_proc])
-        return service_proc.returncode or 1
+    # The ref_server is restarted between phases:
+    #   rollout phase → judge-only  (ENABLE_LLAMA_GUARD=1, ENABLE_REF_MODEL=0)
+    #   train phase   → ref-only    (ENABLE_LLAMA_GUARD=0, ENABLE_REF_MODEL=1)
+    # Data is handed off between phases via ppo_data/ref_pending/ on disk.
     current_model_path = model_path
+    current_service_proc: subprocess.Popen | None = None
 
     try:
         for i in range(total_iterations):
             print(f"\n[orchestrator] ========== GRPO Iteration {i + 1}/{total_iterations} ==========\n")
 
-            # -- Rollout phase --
+            # -- Rollout phase: start judge-only server --
+            rollout_service_spec = build_service_spec(
+                topology, port=ref_server_port, mode="rollout",
+            )
+            print(f"[orchestrator] Starting rollout ref_server (judge-only)...")
+            current_service_proc = launch_processes([rollout_service_spec])[0]
+            if not wait_for_service(current_service_proc, ref_server_url):
+                svc_ret = current_service_proc.returncode or 1
+                terminate_processes([current_service_proc])
+                current_service_proc = None
+                return svc_ret
+
             rollout_specs = build_rollout_specs(
                 topology, ref_server_url,
                 model_path=current_model_path,
@@ -493,20 +518,33 @@ def run_loop(
             rollout_procs = launch_processes(rollout_specs)
 
             # Wait for every gen_worker to finish uploading its batches.
+            rollout_ret: int = 0
             for proc, spec in zip(rollout_procs, rollout_specs):
                 ret = proc.wait()
-                if ret != 0:
+                if ret != 0 and rollout_ret == 0:
                     print(f"[orchestrator] {spec.name} exited with code {ret}, aborting loop.")
-                    return ret
+                    rollout_ret = ret
 
-            if service_proc.poll() is not None:
-                print(f"[orchestrator] ref_server exited unexpectedly "
-                      f"(code {service_proc.returncode}), aborting.")
-                return service_proc.returncode or 1
+            terminate_processes([current_service_proc])
+            current_service_proc = None
+
+            if rollout_ret != 0:
+                return rollout_ret
 
             print(f"[orchestrator] Rollout phase {i + 1} complete.")
 
-            # -- Train phase --
+            # -- Train phase: start ref-model-only server --
+            train_service_spec = build_service_spec(
+                topology, port=ref_server_port, mode="train", model_path=model_path,
+            )
+            print(f"[orchestrator] Starting train ref_server (ref-model-only)...")
+            current_service_proc = launch_processes([train_service_spec])[0]
+            if not wait_for_service(current_service_proc, ref_server_url):
+                svc_ret = current_service_proc.returncode or 1
+                terminate_processes([current_service_proc])
+                current_service_proc = None
+                return svc_ret
+
             train_spec = build_train_spec(
                 topology=topology,
                 ref_server_url=ref_server_url,
@@ -527,15 +565,14 @@ def run_loop(
             )
             print(f"[orchestrator] Starting train phase {i + 1}...")
             train_proc = launch_processes([train_spec])[0]
-            ret = train_proc.wait()
-            if ret != 0:
-                print(f"[orchestrator] trainer exited with code {ret}, aborting loop.")
-                return ret
+            train_ret = train_proc.wait()
 
-            if service_proc.poll() is not None:
-                print(f"[orchestrator] ref_server exited unexpectedly "
-                      f"(code {service_proc.returncode}), aborting.")
-                return service_proc.returncode or 1
+            terminate_processes([current_service_proc])
+            current_service_proc = None
+
+            if train_ret != 0:
+                print(f"[orchestrator] trainer exited with code {train_ret}, aborting loop.")
+                return train_ret
 
             print(f"[orchestrator] Train phase {i + 1} complete.")
 
@@ -553,7 +590,7 @@ def run_loop(
         print("\n[orchestrator] received Ctrl+C, shutting down.")
         return 0
     finally:
-        terminate_processes([service_proc])
+        terminate_processes([current_service_proc] if current_service_proc else [])
 
 
 def main() -> int:
