@@ -116,13 +116,12 @@ class RefService:
                 with open(fpath, "rb") as f:
                     raw = f.read()
                 items = bytes_list_to_list(raw)
-                data: dict[str, Any] = {"base": json.loads(items[0])}
+                data: dict[str, Any] = {"base": json.loads(items[0]), "_fpath": fpath}
                 data["inputs"] = bytes_to_tensor(items[1])
                 data["rewards"] = bytes_to_tensor(items[2])
                 if len(items) == 4:
                     data["gen_logps"] = bytes_to_tensor(items[3])
                 self.ref_request_queue.put(data)
-                fpath.unlink()
             except Exception:
                 print(f"[ref_server] Warning: failed to load {fpath}, skipping.")
                 traceback.print_exc()
@@ -174,6 +173,7 @@ class RefService:
 
         while True:
             data = self.ref_request_queue.get()
+            fpath: Path | None = data.pop("_fpath", None)
             prompt_length = data["base"]["plen"]
 
             with torch.inference_mode():
@@ -192,6 +192,9 @@ class RefService:
             if "gen_logps" in data:
                 result_items.append(tensor_to_bytes(data["gen_logps"]))
             self.ref_result_queue.put(make_bytes_list(result_items))
+            # Delete disk file only after result is in the queue
+            if fpath is not None:
+                fpath.unlink(missing_ok=True)
 
     def run_judge_loop(self) -> None:
         if self.judge is None:
