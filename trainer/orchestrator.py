@@ -216,6 +216,7 @@ def launch_processes(specs: list[ProcessSpec]) -> list[subprocess.Popen]:
             spec.cmd,
             cwd=spec.cwd,
             env=spec.env,
+            start_new_session=True,  # own process group → kills vLLM children on terminate
         )
         processes.append(proc)
     return processes
@@ -263,7 +264,10 @@ def terminate_processes(processes: list[subprocess.Popen], grace_seconds: float 
 
     for proc in processes:
         if proc.poll() is None:
-            proc.send_signal(signal.SIGTERM)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                proc.send_signal(signal.SIGTERM)
 
     deadline = time.time() + grace_seconds
     for proc in processes:
@@ -272,7 +276,10 @@ def terminate_processes(processes: list[subprocess.Popen], grace_seconds: float 
             try:
                 proc.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    proc.kill()
 
 
 def run_rollout_phase(
