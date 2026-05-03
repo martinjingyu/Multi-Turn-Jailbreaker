@@ -61,6 +61,20 @@ def load_ds_config(config_path: str, train_batch_size: int, grad_acc_steps: int)
     return config
 
 
+def ref_server_exhausted(ref_server: str) -> bool:
+    """Returns True when the ref server has no more batches to deliver."""
+    try:
+        resp = requests.get(
+            f"{ref_server}/health",
+            proxies={"http": None, "https": None},
+            timeout=10,
+        )
+        data = resp.json()
+        return data.get("ref_queue_size", 1) == 0 and data.get("result_queue_size", 1) == 0
+    except Exception:
+        return False
+
+
 def get_batch(ref_server: str) -> dict | None:
     try:
         response = requests.get(
@@ -134,7 +148,8 @@ def grpo_step(
         assert compute_gen_logps is False
 
     per_token_loss = -(per_token_loss - beta * per_token_kl)
-    loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+    mask_sum = completion_mask.sum(dim=1).clamp(min=1)
+    loss = ((per_token_loss * completion_mask).sum(dim=1) / mask_sum).mean()
     return loss
 
 
@@ -181,6 +196,8 @@ def main() -> int:
     rank = dist.get_rank()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
     ds_config = load_ds_config(
         args.ds_config,
         train_batch_size=args.train_batch_size,
@@ -220,6 +237,15 @@ def main() -> int:
         if not has_batch.item():
             if idle_start is None:
                 idle_start = time.time()
+
+            # Exit immediately if the ref server has no more batches queued.
+            is_done = ref_server_exhausted(args.ref_server) if rank == 0 else False
+            exhausted = torch.tensor([1 if is_done else 0], dtype=torch.int, device=engine.device)
+            dist.all_reduce(exhausted, op=dist.ReduceOp.MAX)
+            if exhausted.item():
+                if rank == 0:
+                    print("[grpo_train_phase] Ref server queues empty, finishing training phase.")
+                break
 
             idle_elapsed = time.time() - idle_start
             if idle_elapsed >= args.idle_seconds:

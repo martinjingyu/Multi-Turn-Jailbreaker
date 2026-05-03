@@ -250,6 +250,8 @@ def main() -> int:
             "enable_judge": enable_judge,
             "enable_ref_model": enable_ref_model,
             "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "ref_queue_size": service.ref_request_queue.qsize(),
+            "result_queue_size": service.ref_result_queue.qsize(),
         }
 
     @app.post("/upload")
