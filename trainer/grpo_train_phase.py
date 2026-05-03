@@ -47,7 +47,8 @@ def parse_args() -> argparse.Namespace:
         help="Whether gen_workers computed per-token logprobs at rollout time (default: True).",
     )
     parser.add_argument("--upload-hf-repo", type=str, default="")
-    return parser.parse_args()
+    args, _ = parser.parse_known_args()
+    return args
 
 
 def load_ds_config(config_path: str, train_batch_size: int, grad_acc_steps: int) -> dict:
