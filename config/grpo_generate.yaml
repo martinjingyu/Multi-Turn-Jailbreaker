@@ -7,8 +7,8 @@ trees_per_batch: 3
 batch_size: 60
 
 whether_sft: True
-child_num_list: [3,3,5,4]
-# child_num_list: [3,3,3,1]
+# child_num_list: [3,3,5,4]
+child_num_list: [3,3,3,1]
 p_average_strategy: "uniform"
 able_to_reselected: True
 use_strategy: False
