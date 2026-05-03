@@ -185,6 +185,10 @@ def gen_samples(
     if skipped:
         print(f"[gen_worker] Filtered {skipped} malformed samples (missing <analysis>/<action> tags).")
 
+    if not messages_list:
+        print("[gen_worker] No valid samples after filtering. Returning empty batch.")
+        return [], torch.tensor([], dtype=torch.float32), [], []
+
     prompts_text = tokenizer.apply_chat_template(
         messages_list,
         tokenize=False,
@@ -354,6 +358,10 @@ def run_worker(
                 tokenizer,
                 worker_label,
             )
+
+            if not answers:
+                print("[gen_worker] Empty batch, skipping upload.")
+                return
 
             print("[gen_worker] Uploading batches...")
             upload_training_batches(
