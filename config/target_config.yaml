@@ -1,9 +1,9 @@
 # SamplingParams
-# model: meta-llama/Meta-Llama-3-8B-Instruct
+model: meta-llama/Meta-Llama-3-8B-Instruct
 # model: thu-ml/STAIR-Llama-3.1-8B-SFT
 # model: Google/gemini
 # model: Amazon/claude
-model: OpenAI/gpt-5.4
+# model: OpenAI/gpt-5.4
 # model: OpenAI/gpt
 # model: lmsys/vicuna-7b-v1.5
 # model: HuggingFaceH4/zephyr-7b-beta
