@@ -16,7 +16,12 @@ class TargetModel():
         
 
     def load_model(self, config):
-        
+
+        if "X-Boundary" in config.model:
+            from .xboundary import XBoundary
+            self.model = XBoundary(config)
+            return
+
         if "llama" in config.model:
             self.model = LLM(model=config.model, gpu_memory_utilization=config.gpu_memory_utilization, max_model_len = config.max_model_len)
             self.sampling_params = SamplingParams(n=1, temperature=config.temperature, max_tokens = config.max_new_tokens)
@@ -79,8 +84,11 @@ class TargetModel():
         Generate responses for a batch of messages.
         """
 
+        if "X-Boundary" in self.config.model:
+            return self.model.batch_response(messages_list)
+
         if "llama" in self.config.model:
-            inputs_text = self.tokenizer.apply_chat_template(messages_list, 
+            inputs_text = self.tokenizer.apply_chat_template(messages_list,
                 add_generation_prompt=True,
                 tokenize=False)
             

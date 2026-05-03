@@ -108,7 +108,17 @@ class AttackAgent():
         return strategy_list
     
     
+    @staticmethod
+    def _strip_think_block(text: str) -> str:
+        """Remove <think>...</think> blocks that leak into output when enable_thinking=False."""
+        import re
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
     def extract_output_1(self, attacker_response):
+        attacker_response = self._strip_think_block(attacker_response)
+        # If there are multiple <analysis> blocks, keep only the last one
+        if attacker_response.count("<analysis>") > 1:
+            attacker_response = "<analysis>" + attacker_response.rsplit("<analysis>", 1)[1]
 
         reasoning = None
         action = None

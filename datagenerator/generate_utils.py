@@ -343,10 +343,11 @@ class TreeGenerator():
                 
                 # Format reward
                 answer = node.origin_output
-                
+
                 if answer is None:
                     format_reward = 0
                 else:
+                    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
                     pattern = r"^<analysis>.*?</analysis>[\n ]*<action>.*?</action>[\n ]*$"
                     think_count = answer.count("<analysis>") + answer.count("</analysis>")
                     answer_count = answer.count("<action>") + answer.count("</action>")

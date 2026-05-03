@@ -151,6 +151,7 @@ def gen_samples(
     def _is_well_formed(text: str | None) -> bool:
         if not text:
             return False
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         if text.count("<analysis>") + text.count("</analysis>") != 2:
             return False
         if text.count("<action>") + text.count("</action>") != 2:
@@ -170,6 +171,20 @@ def gen_samples(
             input_messages = node.get_agent_input_messages()
             for child in node.children:
                 if not _is_well_formed(child.origin_output):
+                    # Include malformed outputs with a strong negative reward so the
+                    # model receives a gradient signal to fix its format, rather than
+                    # being silently skipped (which leaves the model uncorrected).
+                    if child.origin_output:
+                        messages_list.append(input_messages)
+                        answers.append(child.origin_output)
+                        rewards.append(-2.0)
+                        if "ans_token_ids" not in child.data_for_training:
+                            child.data_for_training["ans_token_ids"] = tokenizer(
+                                child.origin_output,
+                                return_tensors="pt",
+                                add_special_tokens=False,
+                            )["input_ids"][0]
+                        ans_token_ids.append(child.data_for_training["ans_token_ids"])
                     skipped += 1
                     continue
                 messages_list.append(input_messages)
