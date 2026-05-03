@@ -658,8 +658,8 @@ def main() -> int:
     parser.add_argument("--max-save-total", type=int, default=5)
     parser.add_argument("--idle-seconds", type=int, default=600)
     parser.add_argument("--poll-interval", type=int, default=10)
-    parser.add_argument("--lr", type=float, default=1e-6)
-    parser.add_argument("--beta", type=float, default=0.03)
+    parser.add_argument("--lr", type=float, default=2e-7)
+    parser.add_argument("--beta", type=float, default=0.08)
     parser.add_argument("--clip-param", type=float, default=0.2)
     parser.add_argument("--upload-hf-repo", type=str, default="")
     parser.add_argument(

@@ -20,7 +20,7 @@ class AttackAgent():
         
         if "Qwen" in config.model:
             if config.vllm:
-                self.sampling_params = SamplingParams(temperature=config.temperature, max_tokens = config.max_new_tokens)
+                self.sampling_params = SamplingParams(temperature=config.temperature, max_tokens=config.max_new_tokens, repetition_penalty=1.1)
                 self.model = LLM(model=config.model,gpu_memory_utilization=config.gpu_memory_utilization, max_model_len = config.max_tokens)
                 self.tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
                 self.tokenizer.padding_side = "left"
@@ -36,7 +36,7 @@ class AttackAgent():
             
         else:
             if config.vllm:
-                self.sampling_params = SamplingParams(temperature=config.temperature, max_tokens = config.max_new_tokens)
+                self.sampling_params = SamplingParams(temperature=config.temperature, max_tokens=config.max_new_tokens, repetition_penalty=1.1)
                 self.model = LLM(model=config.model,gpu_memory_utilization=config.gpu_memory_utilization,max_model_len = config.max_tokens)
                 self.tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
                 self.tokenizer.padding_side = "left"
