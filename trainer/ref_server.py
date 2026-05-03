@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import threading
+import traceback
 import uuid
 from typing import Any
 
@@ -82,6 +83,7 @@ class RefService:
         self.ref_result_queue: queue.LifoQueue[bytes] = queue.LifoQueue()
         self.judge_request_queue: queue.LifoQueue[dict[str, Any]] = queue.LifoQueue()
         self.judge_results: dict[str, bytes] = {}
+        self.judge_request_ids: set[str] = set()
         self.judge_lock = threading.Lock()
 
     def handle_ref_upload(self, payload: bytes) -> bytes:
@@ -107,7 +109,10 @@ class RefService:
         if not request_id:
             request_id = str(uuid.uuid4())
             payload["request_id"] = request_id
-        self.judge_request_queue.put(payload)
+        with self.judge_lock:
+            if request_id not in self.judge_request_ids and request_id not in self.judge_results:
+                self.judge_request_ids.add(request_id)
+                self.judge_request_queue.put(payload)
         return json.dumps({"request_id": request_id}).encode()
 
     def handle_judge_get(self, request_id: str) -> bytes:
@@ -145,11 +150,17 @@ class RefService:
         while True:
             data = self.judge_request_queue.get()
             request_id = data["request_id"]
-            histories = data["histories"]
-            responses = data["responses"]
-            scores = self.judge.eval_batch(responses, histories)
+            try:
+                histories = data["histories"]
+                responses = data["responses"]
+                scores = self.judge.eval_batch(responses, histories)
+                result = {"scores": scores}
+            except Exception as exc:
+                traceback.print_exc()
+                result = {"error": repr(exc)}
             with self.judge_lock:
-                self.judge_results[request_id] = json.dumps({"scores": scores}).encode()
+                self.judge_request_ids.discard(request_id)
+                self.judge_results[request_id] = json.dumps(result).encode()
 
 
 def main() -> int:

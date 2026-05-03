@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from typing import Any
 
 import requests
@@ -21,6 +22,7 @@ class RemoteLlamaGuardEvaluator:
         poll_interval_seconds: float = 0.2,
         request_timeout_seconds: float = 30.0,
         max_request_bytes: int | None = None,
+        max_rpc_retries: int | None = None,
     ):
         self.service_url = service_url.rstrip("/")
         self.poll_interval_seconds = poll_interval_seconds
@@ -28,6 +30,31 @@ class RemoteLlamaGuardEvaluator:
         self.max_request_bytes = max_request_bytes or int(
             os.environ.get("JUDGE_MAX_REQUEST_BYTES", str(64 * 1024))
         )
+        self.max_rpc_retries = max_rpc_retries or int(
+            os.environ.get("JUDGE_MAX_RPC_RETRIES", "8")
+        )
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        time.sleep(min(10.0, self.poll_interval_seconds * (2**attempt)))
+
+    def _request_with_retries(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        last_error: requests.RequestException | None = None
+
+        for attempt in range(self.max_rpc_retries + 1):
+            try:
+                return requests.request(method, url, **kwargs)
+            except (
+                requests.ConnectionError,
+                requests.Timeout,
+                requests.exceptions.ChunkedEncodingError,
+            ) as exc:
+                last_error = exc
+                if attempt >= self.max_rpc_retries:
+                    break
+                self._sleep_before_retry(attempt)
+
+        assert last_error is not None
+        raise last_error
 
     def _payload_size_bytes(
         self,
@@ -75,12 +102,14 @@ class RemoteLlamaGuardEvaluator:
         chat_histories: list[list[dict[str, Any]]],
     ) -> list[float]:
         payload = {
+            "request_id": str(uuid.uuid4()),
             "responses": target_responses,
             "histories": chat_histories,
         }
         payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
-        response = requests.post(
+        response = self._request_with_retries(
+            "POST",
             f"{self.service_url}/judge/upload",
             data=payload_bytes,
             headers={"Content-Type": "application/json"},
@@ -91,7 +120,8 @@ class RemoteLlamaGuardEvaluator:
         request_id = response.json()["request_id"]
 
         while True:
-            result = requests.get(
+            result = self._request_with_retries(
+                "GET",
                 f"{self.service_url}/judge/get",
                 params={"request_id": request_id},
                 proxies={"http": None, "https": None},
@@ -104,6 +134,8 @@ class RemoteLlamaGuardEvaluator:
                 continue
 
             body = json.loads(result.content)
+            if "error" in body:
+                raise RuntimeError(f"remote judge failed for request_id={request_id}: {body['error']}")
             return body["scores"]
 
     def eval_batch(
