@@ -100,17 +100,21 @@ def get_batch(ref_server: str) -> dict | None:
     return data
 
 
-def get_per_token_logps(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+def get_per_token_logps(logits: torch.Tensor, input_ids: torch.Tensor, chunk_size: int = 64) -> torch.Tensor:
     per_token_logps = []
     for logits_row, input_ids_row in zip(logits, input_ids):
-        # float32 for numerical stability over 128K vocab in bfloat16
-        log_probs = logits_row.float().log_softmax(dim=-1)
-        token_log_prob = torch.gather(
-            log_probs,
-            dim=1,
-            index=input_ids_row.unsqueeze(1),
-        ).squeeze(1)
-        per_token_logps.append(token_log_prob)
+        # Process in chunks along the sequence dimension so we never materialize
+        # the full (seq_len × vocab_size) float32 tensor at once (~1 GiB for 151K vocab).
+        token_log_probs = []
+        for i in range(0, logits_row.shape[0], chunk_size):
+            chunk = logits_row[i : i + chunk_size].float()
+            log_probs = chunk.log_softmax(dim=-1)
+            gathered = torch.gather(
+                log_probs, 1, input_ids_row[i : i + chunk_size].unsqueeze(1)
+            ).squeeze(1)
+            token_log_probs.append(gathered)
+            del chunk, log_probs
+        per_token_logps.append(torch.cat(token_log_probs))
     return torch.stack(per_token_logps)
 
 
