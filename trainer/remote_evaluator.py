@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 
@@ -19,12 +20,14 @@ class RemoteLlamaGuardEvaluator:
         service_url: str,
         poll_interval_seconds: float = 0.2,
         request_timeout_seconds: float = 30.0,
-        max_request_bytes: int = 512 * 1024,
+        max_request_bytes: int | None = None,
     ):
         self.service_url = service_url.rstrip("/")
         self.poll_interval_seconds = poll_interval_seconds
         self.request_timeout_seconds = request_timeout_seconds
-        self.max_request_bytes = max_request_bytes
+        self.max_request_bytes = max_request_bytes or int(
+            os.environ.get("JUDGE_MAX_REQUEST_BYTES", str(64 * 1024))
+        )
 
     def _payload_size_bytes(
         self,
@@ -75,10 +78,12 @@ class RemoteLlamaGuardEvaluator:
             "responses": target_responses,
             "histories": chat_histories,
         }
+        payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
         response = requests.post(
             f"{self.service_url}/judge/upload",
-            json=payload,
+            data=payload_bytes,
+            headers={"Content-Type": "application/json"},
             proxies={"http": None, "https": None},
             timeout=self.request_timeout_seconds,
         )
@@ -110,7 +115,18 @@ class RemoteLlamaGuardEvaluator:
         chunks = self._split_into_chunks(target_responses, chat_histories)
 
         for chunk_responses, chunk_histories in chunks:
-            chunk_scores = self._eval_chunk(chunk_responses, chunk_histories)
+            try:
+                chunk_scores = self._eval_chunk(chunk_responses, chunk_histories)
+            except requests.HTTPError as exc:
+                response = exc.response
+                if response is None or response.status_code != 413 or len(chunk_responses) <= 1:
+                    raise
+
+                midpoint = len(chunk_responses) // 2
+                chunk_scores = [
+                    *self.eval_batch(chunk_responses[:midpoint], chunk_histories[:midpoint]),
+                    *self.eval_batch(chunk_responses[midpoint:], chunk_histories[midpoint:]),
+                ]
             all_scores.extend(chunk_scores)
 
         return all_scores

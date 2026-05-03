@@ -161,6 +161,9 @@ def main() -> int:
     model_path = os.environ.get("REF_MODEL_PATH", "MartinJYHuang/Jailbreak-agent-temp")
     port = int(os.environ.get("REF_SERVER_PORT", "59875"))
     enable_judge = os.environ.get("ENABLE_LLAMA_GUARD", "0") == "1"
+    bottle.BaseRequest.MEMFILE_MAX = int(
+        os.environ.get("BOTTLE_MEMFILE_MAX_BYTES", str(16 * 1024 * 1024))
+    )
 
     service = RefService(model_path=model_path, enable_judge=enable_judge)
     app = bottle.Bottle()
