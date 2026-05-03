@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     with open("data/test.json", "r") as f:
         prompts_data = json.load(f)
-    inputs = [p.get("prompt") or p.get("question") for p in prompts_data]
+    inputs = [p.get("prompt") or p.get("question") for p in prompts_data][0:100]
 
     # Result path: data/result/{org}/{model_name}-{target_name}
     # e.g. data/result/MartinJYHuang/JA-v2-Meta-Llama-3-8B-Instruct

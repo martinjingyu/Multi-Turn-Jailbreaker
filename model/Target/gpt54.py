@@ -3,7 +3,7 @@
 import os
 import configparser
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from openai import AzureOpenAI
+from openai import AzureOpenAI, BadRequestError
 
 endpoint = "https://intern-jingyu-jhu-east.openai.azure.com/"
 model_name = "gpt-5.4"
@@ -35,13 +35,16 @@ class GPT54():
                 max_completion_tokens=16384,
                 model=deployment
             )
+            return response.choices[0].message.content
+        except BadRequestError:
+            return "I'm sorry, I cannot assist with that request."
         except Exception:
             response = self.client.chat.completions.create(
                 messages=messages,
                 max_completion_tokens=16384,
                 model=deployment
             )
-        return response.choices[0].message.content
+            return response.choices[0].message.content
 
     def batch_response(self, messages_list):
         results = [None] * len(messages_list)
