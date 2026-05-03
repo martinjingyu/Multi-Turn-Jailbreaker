@@ -350,14 +350,11 @@ class TreeGenerator():
             for node in node_list[1:]:
                 if node.children == []:
                     continue
-                # Success_reward
+                # Success_reward: fraction of subtree (including self) with raw reward >= 3
+                # nodes[0] == node itself, so self is already included
                 nodes = node.get_all_nodes()
-                rewards = []
-                suc_reward = 0
-                for sub_node in nodes:
-                    reward = float(sub_node.reward)
-                    if reward >= 3:
-                        suc_reward+=1
+                suc_reward = sum(1 for sub_node in nodes if float(sub_node.reward) >= 3)
+                suc_reward = suc_reward / len(nodes)
 
                 
                 # Diversity_reward
@@ -376,10 +373,7 @@ class TreeGenerator():
                         format_reward = 1
                     else:
                         format_reward = 0
-                try:
-                    self_reward = float(node.reward) 
-                except:
-                    self_reward = 1
+                
                     
                 # # Encourage Hitting
                 # credit = 0
@@ -387,7 +381,7 @@ class TreeGenerator():
                 #     credit = 1
                     
                 # Get total reward
-                total_reward = self_reward + self.cfg.success_weight * suc_reward + self.cfg.diversity_weight * div_reward + self.cfg.format_weight * format_reward
+                total_reward =  self.cfg.success_weight * suc_reward + self.cfg.diversity_weight * div_reward + self.cfg.format_weight * format_reward
                 # total_reward = format_reward
 
                 node.reward = total_reward

@@ -11,6 +11,7 @@ import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
+import re
 import requests
 import torch
 import yaml
@@ -142,10 +143,25 @@ def gen_samples(
         for sample_index, root in enumerate(root_list):
             root.save_tree(str(sample_dir / f"{worker_label}_{iteration}_{sample_index}.json"))
 
+    _FORMAT_PATTERN = re.compile(
+        r"^<analysis>.*?</analysis>[\n ]*<action>.*?</action>[\n ]*$",
+        re.DOTALL,
+    )
+
+    def _is_well_formed(text: str | None) -> bool:
+        if not text:
+            return False
+        if text.count("<analysis>") + text.count("</analysis>") != 2:
+            return False
+        if text.count("<action>") + text.count("</action>") != 2:
+            return False
+        return bool(_FORMAT_PATTERN.match(text))
+
     messages_list = []
     answers = []
     ans_token_ids = []
     rewards = []
+    skipped = 0
     for root_node in root_list:
         nodes = root_node.get_all_nodes()
         for node in nodes:
@@ -153,6 +169,9 @@ def gen_samples(
                 continue
             input_messages = node.get_agent_input_messages()
             for child in node.children:
+                if not _is_well_formed(child.origin_output):
+                    skipped += 1
+                    continue
                 messages_list.append(input_messages)
                 answers.append(child.origin_output)
                 rewards.append(float(child.reward))
@@ -163,6 +182,8 @@ def gen_samples(
                         add_special_tokens=False,
                     )["input_ids"][0]
                 ans_token_ids.append(child.data_for_training["ans_token_ids"])
+    if skipped:
+        print(f"[gen_worker] Filtered {skipped} malformed samples (missing <analysis>/<action> tags).")
 
     prompts_text = tokenizer.apply_chat_template(
         messages_list,

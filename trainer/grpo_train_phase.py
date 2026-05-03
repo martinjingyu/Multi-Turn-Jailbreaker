@@ -32,8 +32,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ds-config", type=str, default="config/ds_config.json")
     parser.add_argument("--train-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1e-6)
-    parser.add_argument("--beta", type=float, default=0.03)
+    parser.add_argument("--lr", type=float, default=2e-7)
+    parser.add_argument("--beta", type=float, default=0.08)
     parser.add_argument("--clip-param", type=float, default=0.2)
     parser.add_argument("--all-steps", type=int, default=500)
     parser.add_argument("--save-every", type=int, default=50)
@@ -135,6 +135,7 @@ def grpo_step(
     prompt_length = batch["plen"]
     inputs = batch["inputs"].to(engine.device)
     advantages = batch["rewards"].to(engine.device).unsqueeze(1)
+    advantages = advantages.clamp(-2.0, 2.0)
 
     logits = engine(inputs).logits
     logits = logits[:, :-1, :]
@@ -152,7 +153,10 @@ def grpo_step(
         log_ratio = (per_token_logps - batch["gen_logps"].to(engine.device)).clamp(-10, 10)
         ratio = torch.exp(log_ratio)
         clipped_ratio = torch.clamp(ratio, 1 - clip_param, 1 + clip_param)
-        per_token_loss = torch.min(ratio * advantages, clipped_ratio * advantages)
+        surr1 = ratio * advantages
+        surr2 = clipped_ratio * advantages
+        # For positive advantages: conservative = min; for negative: conservative = max
+        per_token_loss = torch.where(advantages >= 0, torch.min(surr1, surr2), torch.max(surr1, surr2))
     else:
         per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages
         assert compute_gen_logps is False
