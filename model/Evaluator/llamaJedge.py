@@ -7,7 +7,7 @@ import torch.nn.functional as F
 class LlamaGuardModeration:
     def __init__(self, model_id: str = "meta-llama/Llama-Guard-3-8B", dtype: str = "bfloat16"):
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.llm = LLM(model=model_id, dtype=dtype, gpu_memory_utilization= 0.45, max_model_len = 10000)
+        self.llm = LLM(model=model_id, dtype=dtype, gpu_memory_utilization= 0.45, max_model_len = 30000)
         self.sampling_params = SamplingParams(max_tokens=30, stop=["</s>"])
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
