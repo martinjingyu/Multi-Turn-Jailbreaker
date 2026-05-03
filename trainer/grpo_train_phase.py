@@ -144,13 +144,13 @@ def grpo_step(
     per_token_logps = per_token_logps[:, prompt_length - 1 :]
 
     ref_per_token_logps = batch["refs"].to(per_token_logps.device)
-    # Clamp log-ratio to prevent exp() overflow → Inf → NaN
-    kl_log_ratio = (ref_per_token_logps - per_token_logps).clamp(-10, 10)
+    # nan_to_num handles -inf - (-inf) = NaN before clamp (clamp passes NaN through)
+    kl_log_ratio = (ref_per_token_logps - per_token_logps).nan_to_num(0.0).clamp(-10, 10)
     per_token_kl = torch.exp(kl_log_ratio) - kl_log_ratio - 1
     completion_mask = (inputs[:, prompt_length:] != tokenizer.pad_token_id).int()
 
     if "gen_logps" in batch:
-        log_ratio = (per_token_logps - batch["gen_logps"].to(engine.device)).clamp(-10, 10)
+        log_ratio = (per_token_logps - batch["gen_logps"].to(engine.device)).nan_to_num(0.0).clamp(-10, 10)
         ratio = torch.exp(log_ratio)
         clipped_ratio = torch.clamp(ratio, 1 - clip_param, 1 + clip_param)
         surr1 = ratio * advantages

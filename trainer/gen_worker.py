@@ -290,7 +290,7 @@ def upload_training_batches(
             prompt_logprobs = [item.prompt_logprobs[logps_prompt_len:] for item in outputs]
             gen_logps = torch.tensor(
                 [[list(x.values())[0].logprob for x in item] for item in prompt_logprobs]
-            )
+            ).clamp(min=-100)
             data.append(tensor_to_bytes(gen_logps))
 
         xdata = make_bytes_list(data)
