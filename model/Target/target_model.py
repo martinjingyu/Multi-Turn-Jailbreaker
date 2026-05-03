@@ -22,24 +22,26 @@ class TargetModel():
             self.model = XBoundary(config)
             return
 
-        if "llama" in config.model:
+        model_lower = config.model.lower()
+
+        if "llama" in model_lower:
             self.model = LLM(model=config.model, gpu_memory_utilization=config.gpu_memory_utilization, max_model_len = config.max_model_len)
             self.sampling_params = SamplingParams(n=1, temperature=config.temperature, max_tokens = config.max_new_tokens)
             self.tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
-                
-        elif "zephyr" in config.model or "Mistral" in config.model:
+
+        elif "zephyr" in model_lower or "mistral" in model_lower:
             self.model = LLM(model=config.model, gpu_memory_utilization=config.gpu_memory_utilization, max_model_len = config.max_model_len)
             self.sampling_params = SamplingParams(n=1, temperature=config.temperature, max_tokens = config.max_new_tokens)
             self.tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
-            
-        elif "vicuna" in config.model:
+
+        elif "vicuna" in model_lower:
             self.model = LLM(model=config.model, gpu_memory_utilization=config.gpu_memory_utilization, max_model_len = 4096)
             self.sampling_params = SamplingParams(n=1, temperature=config.temperature, max_tokens = config.max_new_tokens)
             self.tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
-            
-        elif "STAIR" in config.model:
+
+        elif "stair" in model_lower:
             self.model = LLM(model=config.model, gpu_memory_utilization=config.gpu_memory_utilization, max_model_len = 4096)
             self.sampling_params = SamplingParams(n=1, temperature=config.temperature, max_tokens = config.max_new_tokens)
             self.tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
@@ -84,18 +86,15 @@ class TargetModel():
         Generate responses for a batch of messages.
         """
 
+        model_lower = self.config.model.lower()
+
         if "X-Boundary" in self.config.model:
             return self.model.batch_response(messages_list)
 
-        if "llama" in self.config.model:
-            inputs_text = self.tokenizer.apply_chat_template(messages_list,
-                add_generation_prompt=True,
-                tokenize=False)
-            
-        elif "vicuna" in self.config.model:
+        if "vicuna" in model_lower:
             inputs_text = self.convert_messages_to_vicuna_prompts(messages_list)
 
-        elif "gpt" in self.config.model or "gemini" in self.config.model or "claude" in self.config.model:
+        elif "gpt" in model_lower or "gemini" in model_lower or "claude" in model_lower:
             return self.model.batch_response(messages_list)
 
         else:
