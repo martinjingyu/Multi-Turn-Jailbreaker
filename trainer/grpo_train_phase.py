@@ -201,8 +201,7 @@ def find_latest_checkpoint(base_dir: str) -> str:
     checkpoints = glob(os.path.join(base_dir, "step_*"))
     if not checkpoints:
         raise ValueError(f"No checkpoint directories found in {base_dir}.")
-    checkpoints = sorted(checkpoints, key=lambda x: int(x.split("_")[-1]))
-    return checkpoints[-1]
+    return max(checkpoints, key=os.path.getmtime)
 
 
 def save_checkpoint(
@@ -261,6 +260,13 @@ def main() -> int:
         optimizer=optimizer,
         model_parameters=model.parameters(),
     )
+
+    # Compute step offset from existing checkpoints so naming accumulates across iterations.
+    existing = glob(os.path.join(args.save_dir, "step_*"))
+    if existing:
+        step_offset = max(int(Path(p).name.split("_")[-1]) for p in existing) + 1
+    else:
+        step_offset = 0
 
     progress = range(args.all_steps)
     if rank == 0:
@@ -387,12 +393,13 @@ def main() -> int:
 
             should_save = ((step + 1) % args.save_every == 0) or (step == args.all_steps - 1)
             if should_save:
-                print(f"[grpo_train_phase] saving model at step {step}")
+                global_step = step_offset + step
+                print(f"[grpo_train_phase] saving model at step {global_step}")
                 save_checkpoint(
                     engine=engine,
                     tokenizer=tokenizer,
                     save_dir=args.save_dir,
-                    step=step,
+                    step=global_step,
                     max_save_total=args.max_save_total,
                 )
 
@@ -407,6 +414,19 @@ def main() -> int:
             f"[grpo_train_phase] finished. total_batches={total_batches}, "
             f"last_loss={last_loss}"
         )
+        if total_batches > 0:
+            global_step = step_offset + step
+            print(f"[grpo_train_phase] saving final checkpoint at step {global_step}")
+            save_checkpoint(
+                engine=engine,
+                tokenizer=tokenizer,
+                save_dir=args.save_dir,
+                step=global_step,
+                max_save_total=args.max_save_total,
+            )
+            if args.upload_hf_repo:
+                latest_model_path = find_latest_checkpoint(args.save_dir)
+                upload_model_folder(latest_model_path, args.upload_hf_repo)
 
     return 0
 

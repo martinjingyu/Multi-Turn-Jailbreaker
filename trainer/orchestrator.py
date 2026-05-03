@@ -403,7 +403,7 @@ def find_latest_checkpoint(save_dir: str) -> str:
     checkpoints = glob(os.path.join(save_dir, "step_*"))
     if not checkpoints:
         raise ValueError(f"No checkpoint directories found in {save_dir}.")
-    return max(checkpoints, key=lambda x: int(x.rsplit("_", 1)[-1]))
+    return max(checkpoints, key=os.path.getmtime)
 
 
 def run_loop(
