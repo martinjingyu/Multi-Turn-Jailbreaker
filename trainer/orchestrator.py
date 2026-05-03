@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
 
+import requests
+
 from topology import ClusterTopology, build_topology, visible_device_env
 
 
@@ -85,6 +87,7 @@ def build_rollout_specs(
         env["PHYSICAL_GPU_ID"] = str(gpu_id)
         env["REF_SERVER_URL"] = ref_server_url
         env["USE_REMOTE_JUDGE"] = "1"
+        env.setdefault("JUDGE_MAX_REQUEST_BYTES", str(32 * 1024))
         env["ROLLOUT_ITER"] = str(rollout_iter)
         env["NUM_ACTOR_WORKERS"] = str(num_actor_workers)
         env["TREES_PER_WORKER"] = str(trees_per_worker)
@@ -205,6 +208,42 @@ def launch_processes(specs: list[ProcessSpec]) -> list[subprocess.Popen]:
     return processes
 
 
+def wait_for_service(
+    proc: subprocess.Popen,
+    service_url: str,
+    timeout_seconds: float = 1800.0,
+    poll_seconds: float = 5.0,
+) -> bool:
+    deadline = time.time() + timeout_seconds
+    health_url = f"{service_url}/health"
+
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            print(
+                f"[orchestrator] service exited before becoming ready "
+                f"(code {proc.returncode})."
+            )
+            return False
+
+        try:
+            response = requests.get(
+                health_url,
+                proxies={"http": None, "https": None},
+                timeout=5.0,
+            )
+            if response.ok:
+                print(f"[orchestrator] service is ready: {health_url}")
+                return True
+        except requests.RequestException:
+            pass
+
+        print(f"[orchestrator] waiting for service: {health_url}")
+        time.sleep(poll_seconds)
+
+    print(f"[orchestrator] service did not become ready within {timeout_seconds:.0f}s.")
+    return False
+
+
 def terminate_processes(processes: list[subprocess.Popen], grace_seconds: float = 5.0) -> None:
     if not processes:
         return
@@ -242,7 +281,13 @@ def run_rollout_phase(
 
     processes: list[subprocess.Popen] = []
     try:
-        processes = launch_processes(all_specs)
+        service_proc = launch_processes([service_spec])[0]
+        processes = [service_proc]
+        if not wait_for_service(service_proc, ref_server_url):
+            return service_proc.returncode or 1
+
+        rollout_procs = launch_processes(rollout_specs)
+        processes.extend(rollout_procs)
         print("")
         print("[orchestrator] rollout phase launched. Press Ctrl+C to stop.")
         while True:
@@ -310,7 +355,13 @@ def run_train_phase(
 
     processes: list[subprocess.Popen] = []
     try:
-        processes = launch_processes(all_specs)
+        service_proc = launch_processes([service_spec])[0]
+        processes = [service_proc]
+        if not wait_for_service(service_proc, ref_server_url):
+            return service_proc.returncode or 1
+
+        train_proc = launch_processes([train_spec])[0]
+        processes.append(train_proc)
         print("")
         print("[orchestrator] training phase launched. Press Ctrl+C to stop.")
         while True:
@@ -417,6 +468,9 @@ def run_loop(
     # Start the ref_server once; it persists across all rollout+train iterations.
     print("[orchestrator] Starting ref_server (kept alive for all iterations)...")
     service_proc = launch_processes([service_spec])[0]
+    if not wait_for_service(service_proc, ref_server_url):
+        terminate_processes([service_proc])
+        return service_proc.returncode or 1
     current_model_path = model_path
 
     try:
