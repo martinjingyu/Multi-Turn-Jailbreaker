@@ -212,6 +212,7 @@ def main() -> int:
         dtype=torch.bfloat16,
         _attn_implementation="sdpa",
     )
+    model.gradient_checkpointing_enable()
     optimizer = DeepSpeedCPUAdam(model.parameters(), lr=args.lr)
     engine, optimizer, _, _ = deepspeed.initialize(
         config=ds_config,
