@@ -242,13 +242,27 @@ def upload_training_batches(
         ]
 
         if COMPUTE_GEN_LOGPS:
-            completions = tokenizer.batch_decode(merged_ids)
+            # Cap total sequence length to avoid OOM: vLLM materializes
+            # (seq_len × vocab_size) float32 logits for prompt_logprobs.
+            MAX_LOGPS_SEQ_LEN = 2048
+            completion_len = output_ids.shape[1]
+            keep_prompt = max(0, MAX_LOGPS_SEQ_LEN - completion_len)
+            if sub_prompt_ids.shape[1] > keep_prompt:
+                logps_ids = torch.cat(
+                    [sub_prompt_ids[:, -keep_prompt:], output_ids], dim=1
+                )
+                logps_prompt_len = keep_prompt
+            else:
+                logps_ids = merged_ids
+                logps_prompt_len = prompt_length
+
+            completions = tokenizer.batch_decode(logps_ids)
             outputs = attacker.model.generate(
                 completions,
                 sampling_params=gen_logps_sp,
                 use_tqdm=False,
             )
-            prompt_logprobs = [item.prompt_logprobs[prompt_length:] for item in outputs]
+            prompt_logprobs = [item.prompt_logprobs[logps_prompt_len:] for item in outputs]
             gen_logps = torch.tensor(
                 [[list(x.values())[0].logprob for x in item] for item in prompt_logprobs]
             )
