@@ -56,6 +56,8 @@ def load_ds_config(config_path: str, train_batch_size: int, grad_acc_steps: int)
         config = json.load(f)
     config["train_micro_batch_size_per_gpu"] = train_batch_size
     config["gradient_accumulation_steps"] = grad_acc_steps
+    # Remove "auto" so DeepSpeed computes train_batch_size = micro_batch * grad_acc * world_size
+    config.pop("train_batch_size", None)
     return config
 
 
