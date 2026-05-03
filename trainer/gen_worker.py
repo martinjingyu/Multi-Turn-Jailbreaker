@@ -32,7 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 MODEL_PATH = "MartinJYHuang/Jailbreak-agent-temp"
 TRAIN_BATCH_SIZE = 1
-MAX_TOKEN_LEN = 6144
+MAX_TOKEN_LEN = int(os.environ.get("ROLLOUT_MAX_PROMPT_TOKENS", "4096"))
 COMPUTE_GEN_LOGPS = True
 DEFAULT_REF_SERVER = "http://localhost:59875"
 DEFAULT_MODEL_PATH = MODEL_PATH

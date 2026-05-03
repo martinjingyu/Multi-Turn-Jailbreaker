@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--idle-seconds", type=int, default=600)
     parser.add_argument("--poll-interval", type=int, default=10)
     parser.add_argument(
+        "--max-train-seq-len",
+        type=int,
+        default=int(os.environ.get("TRAIN_MAX_SEQ_LEN", "4096")),
+        help="Skip queued batches whose total input length exceeds this value.",
+    )
+    parser.add_argument(
         "--compute-gen-logps",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -160,6 +166,33 @@ def grpo_step(
     return loss
 
 
+def batch_debug_summary(batch: dict) -> str:
+    inputs = batch["inputs"]
+    refs = batch["refs"]
+    gen_logps = batch.get("gen_logps")
+    parts = [
+        f"plen={batch['plen']}",
+        f"inputs_shape={tuple(inputs.shape)}",
+        f"refs_shape={tuple(refs.shape)}",
+    ]
+    if gen_logps is not None:
+        parts.append(f"gen_logps_shape={tuple(gen_logps.shape)}")
+    return ", ".join(parts)
+
+
+def cuda_memory_summary(device: torch.device) -> str:
+    if device.type != "cuda":
+        return "cuda=not-used"
+    allocated = torch.cuda.memory_allocated(device) / 1024**3
+    reserved = torch.cuda.memory_reserved(device) / 1024**3
+    max_allocated = torch.cuda.max_memory_allocated(device) / 1024**3
+    return (
+        f"cuda_allocated={allocated:.2f}GiB, "
+        f"cuda_reserved={reserved:.2f}GiB, "
+        f"cuda_max_allocated={max_allocated:.2f}GiB"
+    )
+
+
 def find_latest_checkpoint(base_dir: str) -> str:
     checkpoints = glob(os.path.join(base_dir, "step_*"))
     if not checkpoints:
@@ -274,14 +307,57 @@ def main() -> int:
 
         idle_start = None
 
-        loss = grpo_step(
-            batch=batch,
-            engine=engine,
-            tokenizer=tokenizer,
-            beta=args.beta,
-            clip_param=args.clip_param,
-            compute_gen_logps=args.compute_gen_logps,
+        local_seq_len = int(batch["inputs"].shape[1])
+        too_long = torch.tensor(
+            [1 if local_seq_len > args.max_train_seq_len else 0],
+            dtype=torch.int,
+            device=engine.device,
         )
+        dist.all_reduce(too_long, op=dist.ReduceOp.MAX)
+        if too_long.item():
+            if rank == 0:
+                print(
+                    "[grpo_train_phase] Skipping overlong batch: "
+                    f"max_train_seq_len={args.max_train_seq_len}, "
+                    f"{batch_debug_summary(batch)}, "
+                    f"{cuda_memory_summary(engine.device)}"
+                )
+            continue
+
+        if rank == 0 and total_batches % 10 == 0:
+            print(
+                "[grpo_train_phase] Training batch: "
+                f"{batch_debug_summary(batch)}, "
+                f"{cuda_memory_summary(engine.device)}"
+            )
+
+        local_oom = torch.tensor([0], dtype=torch.int, device=engine.device)
+        loss = None
+        try:
+            loss = grpo_step(
+                batch=batch,
+                engine=engine,
+                tokenizer=tokenizer,
+                beta=args.beta,
+                clip_param=args.clip_param,
+                compute_gen_logps=args.compute_gen_logps,
+            )
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower():
+                raise
+            local_oom.fill_(1)
+            if rank == 0:
+                print(
+                    "[grpo_train_phase] CUDA OOM during forward/backward prep: "
+                    f"{batch_debug_summary(batch)}, "
+                    f"{cuda_memory_summary(engine.device)}"
+                )
+            torch.cuda.empty_cache()
+
+        dist.all_reduce(local_oom, op=dist.ReduceOp.MAX)
+        if local_oom.item():
+            continue
+        assert loss is not None
 
         # Skip non-finite loss to prevent NaN from corrupting model weights.
         finite = torch.tensor([1 if torch.isfinite(loss) else 0], dtype=torch.int, device=engine.device)
