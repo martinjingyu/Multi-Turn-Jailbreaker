@@ -148,8 +148,11 @@ def grpo_step(
         assert compute_gen_logps is False
 
     per_token_loss = -(per_token_loss - beta * per_token_kl)
+    # torch.where avoids 0 * NaN = NaN that occurs with plain multiplication
+    mask_bool = completion_mask.bool()
+    per_token_loss = torch.where(mask_bool, per_token_loss, torch.zeros_like(per_token_loss))
     mask_sum = completion_mask.sum(dim=1).clamp(min=1)
-    loss = ((per_token_loss * completion_mask).sum(dim=1) / mask_sum).mean()
+    loss = (per_token_loss.sum(dim=1) / mask_sum).mean()
     return loss
 
 
@@ -274,6 +277,15 @@ def main() -> int:
             clip_param=args.clip_param,
             compute_gen_logps=args.compute_gen_logps,
         )
+
+        # Skip non-finite loss to prevent NaN from corrupting model weights.
+        finite = torch.tensor([1 if torch.isfinite(loss) else 0], dtype=torch.int, device=engine.device)
+        dist.all_reduce(finite, op=dist.ReduceOp.MIN)
+        if not finite.item():
+            if rank == 0:
+                print(f"[grpo_train_phase] Non-finite loss ({loss.item():.4f}), skipping batch.")
+            continue
+
         engine.backward(loss)
         engine.step()
 
