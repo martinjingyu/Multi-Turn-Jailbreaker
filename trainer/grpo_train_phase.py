@@ -103,7 +103,8 @@ def get_batch(ref_server: str) -> dict | None:
 def get_per_token_logps(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
     per_token_logps = []
     for logits_row, input_ids_row in zip(logits, input_ids):
-        log_probs = logits_row.log_softmax(dim=-1)
+        # float32 for numerical stability over 128K vocab in bfloat16
+        log_probs = logits_row.float().log_softmax(dim=-1)
         token_log_prob = torch.gather(
             log_probs,
             dim=1,
@@ -132,15 +133,14 @@ def grpo_step(
     per_token_logps = per_token_logps[:, prompt_length - 1 :]
 
     ref_per_token_logps = batch["refs"].to(per_token_logps.device)
-    per_token_kl = (
-        torch.exp(ref_per_token_logps - per_token_logps)
-        - (ref_per_token_logps - per_token_logps)
-        - 1
-    )
+    # Clamp log-ratio to prevent exp() overflow → Inf → NaN
+    kl_log_ratio = (ref_per_token_logps - per_token_logps).clamp(-10, 10)
+    per_token_kl = torch.exp(kl_log_ratio) - kl_log_ratio - 1
     completion_mask = (inputs[:, prompt_length:] != tokenizer.pad_token_id).int()
 
     if "gen_logps" in batch:
-        ratio = torch.exp(per_token_logps - batch["gen_logps"].to(engine.device))
+        log_ratio = (per_token_logps - batch["gen_logps"].to(engine.device)).clamp(-10, 10)
+        ratio = torch.exp(log_ratio)
         clipped_ratio = torch.clamp(ratio, 1 - clip_param, 1 + clip_param)
         per_token_loss = torch.min(ratio * advantages, clipped_ratio * advantages)
     else:
